@@ -4,6 +4,7 @@ dist
 .turbo
 .expo
 .next
+.ua
 *.log
 .env
 .env.local
