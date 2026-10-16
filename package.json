@@ -1,0 +1,19 @@
+{
+  "name": "halochat-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "packageManager": "pnpm@10.6.5",
+  "scripts": {
+    "build": "pnpm --filter \"@halochat/*\" run build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "dev:server": "pnpm --filter @halochat/server dev",
+    "dev:support": "pnpm --filter @halochat/support dev",
+    "dev:mobile": "pnpm --filter @halochat/mobile dev",
+    "lint": "pnpm --filter \"@halochat/*\" run lint || true"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.2",
+    "vitest": "^3.0.7"
+  }
+}

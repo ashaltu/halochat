@@ -1,0 +1,17 @@
+{
+  "expo": {
+    "name": "HaloChat",
+    "slug": "halochat",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "halochat",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "web": {
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-router"
+    ]
+  }
+}

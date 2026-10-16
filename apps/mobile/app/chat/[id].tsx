@@ -1,0 +1,785 @@
+import React, { useState, useEffect, useRef } from "react";
+import {
+  View,
+  Text,
+  FlatList,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  ActivityIndicator,
+  Modal,
+  ScrollView,
+} from "react-native";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { apiRequest } from "../../src/api/client.js";
+import { theme } from "../../src/theme.js";
+import { useAuthStore } from "../../src/stores/auth.js";
+import { useRealtimeStore } from "../../src/stores/realtime.js";
+
+export default function ChatConversationScreen() {
+  const { id } = useLocalSearchParams<{ id: string }>();
+  const router = useRouter();
+  const queryClient = useQueryClient();
+  const { user } = useAuthStore();
+  const { subscribe } = useRealtimeStore();
+
+  const [inputText, setInputText] = useState("");
+  const [whispers, setWhispers] = useState<any[]>([]);
+  const [infoModalVisible, setInfoModalVisible] = useState(false);
+  const [reportModalVisible, setReportModalVisible] = useState(false);
+  const [reportReason, setReportReason] = useState("");
+  const [reportDetails, setReportDetails] = useState("");
+  const flatListRef = useRef<FlatList>(null);
+
+  // Fetch Chat details
+  const { data: chatData, isLoading: chatLoading } = useQuery({
+    queryKey: ["chat", id],
+    queryFn: () => apiRequest<{ chat: any }>(`/api/v1/chats/${id}`),
+    refetchInterval: 5000,
+  });
+
+  // Fetch Messages
+  const { data: messagesData, isLoading: messagesLoading } = useQuery({
+    queryKey: ["messages", id],
+    queryFn: () => apiRequest<{ messages: any[] }>(`/api/v1/chats/${id}/messages`),
+    refetchInterval: 3000,
+  });
+
+  // Fetch user's angels for "Invite Angel" action
+  const { data: protectionData } = useQuery({
+    queryKey: ["my-protection"],
+    queryFn: () => apiRequest<{ angels: any[] }>("/api/v1/me/protection"),
+  });
+
+  // Realtime listeners
+  useEffect(() => {
+    const unsubMsg = subscribe("message.new", (payload) => {
+      if (payload.message?.chatId === id) {
+        queryClient.invalidateQueries({ queryKey: ["messages", id] });
+      }
+    });
+
+    const unsubWhisper = subscribe("whisper.new", (payload) => {
+      if (payload.whisper?.chatId === id) {
+        setWhispers((prev) => [...prev, payload.whisper]);
+      }
+    });
+
+    const unsubChat = subscribe("chat.updated", (payload) => {
+      if (payload.chatId === id) {
+        queryClient.invalidateQueries({ queryKey: ["chat", id] });
+      }
+    });
+
+    return () => {
+      unMsg: unsubMsg();
+      unsubWhisper();
+      unsubChat();
+    };
+  }, [id]);
+
+  // Mutations
+  const sendMessageMutation = useMutation({
+    mutationFn: (text: string) =>
+      apiRequest(`/api/v1/chats/${id}/messages`, {
+        method: "POST",
+        body: JSON.stringify({
+          ciphertext: text,
+        }),
+      }),
+    onSuccess: () => {
+      setInputText("");
+      queryClient.invalidateQueries({ queryKey: ["messages", id] });
+    },
+  });
+
+  const endChatMutation = useMutation({
+    mutationFn: () => apiRequest(`/api/v1/chats/${id}/end`, { method: "POST" }),
+    onSuccess: () => {
+      setInfoModalVisible(false);
+      queryClient.invalidateQueries({ queryKey: ["chat", id] });
+    },
+  });
+
+  const leaveRequestMutation = useMutation({
+    mutationFn: (angelUserId: string) => {
+      const reason = prompt("Enter a short reason for your Angel (optional):") || undefined;
+      return apiRequest(`/api/v1/chats/${id}/access-requests`, {
+        method: "POST",
+        body: JSON.stringify({
+          type: "LEAVE",
+          angelUserId,
+          reason,
+        }),
+      });
+    },
+    onSuccess: () => {
+      alert("Request sent to your Angel to leave the chat.");
+      setInfoModalVisible(false);
+    },
+  });
+
+  const inviteAngelMutation = useMutation({
+    mutationFn: (angelAssignmentId: string) =>
+      apiRequest(`/api/v1/chats/${id}/angel-invitations`, {
+        method: "POST",
+        body: JSON.stringify({ angelAssignmentId }),
+      }),
+    onSuccess: () => {
+      alert("Angel invited into conversation.");
+      setInfoModalVisible(false);
+      queryClient.invalidateQueries({ queryKey: ["chat", id] });
+    },
+  });
+
+  const blockUserMutation = useMutation({
+    mutationFn: (partnerId: string) =>
+      apiRequest(`/api/v1/users/${partnerId}/block`, { method: "POST" }),
+    onSuccess: () => {
+      alert("User blocked.");
+      router.replace("/(tabs)");
+    },
+  });
+
+  const submitReportMutation = useMutation({
+    mutationFn: () =>
+      apiRequest(`/api/v1/chats/${id}/report`, {
+        method: "POST",
+        body: JSON.stringify({
+          reason: reportReason,
+          details: reportDetails,
+          evidence: (messagesData?.messages || []).slice(-5).map((m) => m.ciphertext),
+        }),
+      }),
+    onSuccess: () => {
+      setReportModalVisible(false);
+      setReportReason("");
+      setReportDetails("");
+      alert("Report submitted for support staff review.");
+    },
+  });
+
+  const chat = chatData?.chat;
+  const messages = messagesData?.messages || [];
+  const isProtected = chat?.mode === "PROTECTED";
+  const isRestricted = chat?.isSendingRestricted;
+  const isEnded = chat?.status === "ENDED";
+
+  const partnerId =
+    chat?.requesterUserId === user?.id ? chat?.recipientUserId : chat?.requesterUserId;
+
+  const handleSend = () => {
+    if (!inputText.trim() || isRestricted || isEnded) return;
+    sendMessageMutation.mutate(inputText.trim());
+  };
+
+  // Combine messages & whispers sorted
+  const combinedItems = [
+    ...messages.map((m) => ({ ...m, isWhisper: false })),
+    ...whispers.map((w) => ({ ...w, isWhisper: true })),
+  ].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+  return (
+    <View style={styles.container}>
+      {/* Chat Top Banner */}
+      <View style={styles.topBanner}>
+        <View style={styles.bannerInfo}>
+          <Text style={styles.partnerHeaderTitle}>
+            Participant #{partnerId?.substring(0, 8)}
+          </Text>
+          <View
+            style={[
+              styles.modePill,
+              isProtected ? styles.modeProtected : styles.modeComfort,
+            ]}
+          >
+            <Text
+              style={[
+                styles.modePillText,
+                isProtected ? styles.modeTextProtected : styles.modeTextComfort,
+              ]}
+            >
+              {isProtected ? "🛡️ PROTECTED MODE" : "💬 COMFORT MODE"}
+            </Text>
+          </View>
+        </View>
+
+        <TouchableOpacity
+          style={styles.infoBtn}
+          onPress={() => setInfoModalVisible(true)}
+        >
+          <Text style={styles.infoBtnText}>⚙️ Chat Info</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Sending Restricted Notice (D13) */}
+      {isRestricted ? (
+        <View style={styles.restrictionBanner}>
+          <Text style={styles.restrictionIcon}>⏸️</Text>
+          <Text style={styles.restrictionText}>
+            Your Angel has temporarily paused your sending in this chat.
+          </Text>
+        </View>
+      ) : null}
+
+      {/* Messages List */}
+      {chatLoading || messagesLoading ? (
+        <View style={styles.center}>
+          <ActivityIndicator size="large" color={theme.colors.primary} />
+        </View>
+      ) : (
+        <FlatList
+          ref={flatListRef}
+          data={combinedItems}
+          keyExtractor={(item) => (item.isWhisper ? `whisper-${item.id}` : `msg-${item.id}`)}
+          onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+          renderItem={({ item }) => {
+            if (item.isWhisper) {
+              return (
+                <View style={styles.whisperBubble}>
+                  <Text style={styles.whisperHeader}>✨ Private Angel Whisper</Text>
+                  <Text style={styles.whisperText}>{item.ciphertext}</Text>
+                  <Text style={styles.whisperTime}>
+                    {new Date(item.createdAt).toLocaleTimeString([], {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </Text>
+                </View>
+              );
+            }
+
+            const isMine = item.senderId === user?.id;
+            return (
+              <View
+                style={[
+                  styles.messageBubble,
+                  isMine ? styles.myMessage : styles.partnerMessage,
+                ]}
+              >
+                <Text style={styles.messageText}>{item.ciphertext}</Text>
+                <Text style={styles.messageTime}>
+                  {new Date(item.createdAt).toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
+                </Text>
+              </View>
+            );
+          }}
+          contentContainerStyle={styles.messagesList}
+        />
+      )}
+
+      {/* Composer */}
+      <View style={styles.composerContainer}>
+        {isEnded ? (
+          <View style={styles.disabledComposer}>
+            <Text style={styles.disabledComposerText}>This conversation has ended.</Text>
+          </View>
+        ) : isRestricted ? (
+          <View style={styles.disabledComposer}>
+            <Text style={styles.disabledComposerText}>
+              Composer paused by your Angel.
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.composerRow}>
+            <TextInput
+              style={styles.composerInput}
+              placeholder="Type an end-to-end encrypted message..."
+              placeholderTextColor={theme.colors.textMuted}
+              value={inputText}
+              onChangeText={setInputText}
+              multiline
+            />
+            <TouchableOpacity
+              style={[
+                styles.sendBtn,
+                (!inputText.trim() || sendMessageMutation.isPending) && styles.sendBtnDisabled,
+              ]}
+              onPress={handleSend}
+              disabled={!inputText.trim() || sendMessageMutation.isPending}
+            >
+              <Text style={styles.sendBtnText}>Send</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+      </View>
+
+      {/* Chat Info Modal */}
+      <Modal visible={infoModalVisible} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Conversation Controls</Text>
+              <TouchableOpacity onPress={() => setInfoModalVisible(false)}>
+                <Text style={styles.modalCloseText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={{ maxHeight: 400 }}>
+              {/* Own Angels Status (D8) */}
+              <View style={styles.sheetSection}>
+                <Text style={styles.sheetSectionTitle}>Your Assigned Angels</Text>
+                {chat?.ownAngels && chat.ownAngels.length > 0 ? (
+                  chat.ownAngels.map((a: any) => (
+                    <View key={a.id} style={styles.angelCard}>
+                      <View>
+                        <Text style={styles.angelName}>@{a.angelUsername || a.angelUserId}</Text>
+                        <Text style={styles.angelStatus}>
+                          {a.hasActiveRestriction ? "Imposed send pause" : "Active oversight"}
+                        </Text>
+                      </View>
+                      <TouchableOpacity
+                        style={styles.leaveReqBtn}
+                        onPress={() => leaveRequestMutation.mutate(a.angelUserId)}
+                      >
+                        <Text style={styles.leaveReqBtnText}>"I'm Comfortable" (Ask to Leave)</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ))
+                ) : (
+                  <Text style={styles.sheetMuted}>No Angels currently protecting your side.</Text>
+                )}
+              </View>
+
+              {/* Invite Angel into Chat (D7) */}
+              {!isProtected ? (
+                <View style={styles.sheetSection}>
+                  <Text style={styles.sheetSectionTitle}>Invite Angel to Supervise</Text>
+                  {protectionData?.angels && protectionData.angels.length > 0 ? (
+                    protectionData.angels.map((a) => (
+                      <TouchableOpacity
+                        key={a.id}
+                        style={styles.inviteAngelBtn}
+                        onPress={() => inviteAngelMutation.mutate(a.id)}
+                      >
+                        <Text style={styles.inviteAngelBtnText}>
+                          Invite @{a.username} into this chat
+                        </Text>
+                      </TouchableOpacity>
+                    ))
+                  ) : (
+                    <Text style={styles.sheetMuted}>
+                      Configure Angels in Settings to invite them here.
+                    </Text>
+                  )}
+                </View>
+              ) : null}
+
+              {/* Safety Actions */}
+              <View style={styles.sheetSection}>
+                <Text style={styles.sheetSectionTitle}>Safety & Actions</Text>
+                <TouchableOpacity
+                  style={[styles.actionBtn, { borderColor: theme.colors.warning }]}
+                  onPress={() => {
+                    setInfoModalVisible(false);
+                    setReportModalVisible(true);
+                  }}
+                >
+                  <Text style={[styles.actionBtnText, { color: theme.colors.warning }]}>
+                    ⚠️ Report Conversation
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.actionBtn, { borderColor: theme.colors.danger }]}
+                  onPress={() => {
+                    if (confirm("Are you sure you want to block this user?")) {
+                      blockUserMutation.mutate(partnerId);
+                    }
+                  }}
+                >
+                  <Text style={[styles.actionBtnText, { color: theme.colors.danger }]}>
+                    🚫 Block User
+                  </Text>
+                </TouchableOpacity>
+
+                {!isEnded ? (
+                  <TouchableOpacity
+                    style={[styles.actionBtn, { borderColor: theme.colors.textMuted }]}
+                    onPress={() => {
+                      if (confirm("End this conversation?")) {
+                        endChatMutation.mutate();
+                      }
+                    }}
+                  >
+                    <Text style={[styles.actionBtnText, { color: theme.colors.text }]}>
+                      🛑 End Conversation
+                    </Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Report Modal */}
+      <Modal visible={reportModalVisible} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Report Conversation</Text>
+            <Text style={styles.modalSub}>
+              Explicitly attaches recent encrypted messages as evidence for review.
+            </Text>
+
+            <TextInput
+              style={styles.reportInput}
+              placeholder="Reason (e.g. harassment, scam, inappropriate conduct)..."
+              placeholderTextColor={theme.colors.textMuted}
+              value={reportReason}
+              onChangeText={setReportReason}
+            />
+
+            <TextInput
+              style={[styles.reportInput, { minHeight: 60, marginTop: 8 }]}
+              placeholder="Additional details..."
+              placeholderTextColor={theme.colors.textMuted}
+              multiline
+              value={reportDetails}
+              onChangeText={setReportDetails}
+            />
+
+            <View style={{ flexDirection: "row", gap: 8, marginTop: 14 }}>
+              <TouchableOpacity
+                style={[styles.modalSubmitBtn, !reportReason.trim() && { opacity: 0.5 }]}
+                disabled={!reportReason.trim() || submitReportMutation.isPending}
+                onPress={() => submitReportMutation.mutate()}
+              >
+                <Text style={styles.modalBtnText}>Submit Report</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.modalCancelBtn}
+                onPress={() => setReportModalVisible(false)}
+              >
+                <Text style={styles.modalBtnText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: theme.colors.bg,
+  },
+  topBanner: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    backgroundColor: theme.colors.card,
+    padding: theme.spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.border,
+  },
+  bannerInfo: {
+    gap: 4,
+  },
+  partnerHeaderTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: theme.colors.text,
+  },
+  modePill: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: theme.radii.full,
+    borderWidth: 1,
+    alignSelf: "flex-start",
+  },
+  modeComfort: {
+    backgroundColor: "rgba(59, 130, 246, 0.15)",
+    borderColor: theme.colors.comfort,
+  },
+  modeProtected: {
+    backgroundColor: "rgba(16, 185, 129, 0.15)",
+    borderColor: theme.colors.protected,
+  },
+  modePillText: {
+    fontSize: 10,
+    fontWeight: "700",
+  },
+  modeTextComfort: { color: theme.colors.comfort },
+  modeTextProtected: { color: theme.colors.protected },
+  infoBtn: {
+    backgroundColor: theme.colors.bg,
+    borderColor: theme.colors.border,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: theme.radii.full,
+  },
+  infoBtnText: {
+    color: theme.colors.text,
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  restrictionBanner: {
+    backgroundColor: "rgba(245, 158, 11, 0.2)",
+    borderColor: theme.colors.warning,
+    borderWidth: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 10,
+    gap: 8,
+  },
+  restrictionIcon: { fontSize: 16 },
+  restrictionText: {
+    color: theme.colors.warning,
+    fontSize: 13,
+    fontWeight: "600",
+    flex: 1,
+  },
+  center: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  messagesList: {
+    padding: theme.spacing.md,
+    gap: theme.spacing.sm,
+  },
+  messageBubble: {
+    maxWidth: "80%",
+    padding: 12,
+    borderRadius: theme.radii.md,
+  },
+  myMessage: {
+    alignSelf: "flex-end",
+    backgroundColor: theme.colors.primary,
+    borderBottomRightRadius: 2,
+  },
+  partnerMessage: {
+    alignSelf: "flex-start",
+    backgroundColor: theme.colors.card,
+    borderColor: theme.colors.border,
+    borderWidth: 1,
+    borderBottomLeftRadius: 2,
+  },
+  messageText: {
+    color: "#fff",
+    fontSize: 15,
+    lineHeight: 20,
+  },
+  messageTime: {
+    fontSize: 10,
+    color: "rgba(255,255,255,0.6)",
+    alignSelf: "flex-end",
+    marginTop: 4,
+  },
+  whisperBubble: {
+    backgroundColor: "rgba(236, 72, 153, 0.15)",
+    borderColor: "#ec4899",
+    borderWidth: 1,
+    borderRadius: theme.radii.md,
+    padding: 12,
+    marginVertical: 4,
+    alignSelf: "center",
+    width: "90%",
+  },
+  whisperHeader: {
+    color: "#ec4899",
+    fontSize: 11,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    marginBottom: 4,
+  },
+  whisperText: {
+    color: theme.colors.text,
+    fontSize: 14,
+    fontStyle: "italic",
+  },
+  whisperTime: {
+    fontSize: 10,
+    color: theme.colors.textMuted,
+    alignSelf: "flex-end",
+    marginTop: 4,
+  },
+  composerContainer: {
+    backgroundColor: theme.colors.card,
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.border,
+    padding: theme.spacing.sm,
+  },
+  composerRow: {
+    flexDirection: "row",
+    gap: 8,
+    alignItems: "center",
+  },
+  composerInput: {
+    flex: 1,
+    backgroundColor: theme.colors.bg,
+    borderColor: theme.colors.border,
+    borderWidth: 1,
+    borderRadius: theme.radii.full,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    color: theme.colors.text,
+    maxHeight: 100,
+    fontSize: 14,
+  },
+  sendBtn: {
+    backgroundColor: theme.colors.primary,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: theme.radii.full,
+  },
+  sendBtnDisabled: {
+    opacity: 0.5,
+  },
+  sendBtnText: {
+    color: "#fff",
+    fontWeight: "700",
+    fontSize: 14,
+  },
+  disabledComposer: {
+    padding: 12,
+    alignItems: "center",
+  },
+  disabledComposerText: {
+    color: theme.colors.textMuted,
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.8)",
+    justifyContent: "flex-end",
+  },
+  modalContent: {
+    backgroundColor: theme.colors.card,
+    borderTopLeftRadius: theme.radii.lg,
+    borderTopRightRadius: theme.radii.lg,
+    padding: theme.spacing.lg,
+    borderColor: theme.colors.border,
+    borderWidth: 1,
+  },
+  modalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: theme.spacing.md,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: theme.colors.text,
+  },
+  modalCloseText: {
+    fontSize: 18,
+    color: theme.colors.textMuted,
+  },
+  sheetSection: {
+    marginBottom: theme.spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.border,
+    paddingBottom: theme.spacing.md,
+  },
+  sheetSectionTitle: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: theme.colors.textMuted,
+    textTransform: "uppercase",
+    marginBottom: 8,
+  },
+  sheetMuted: {
+    fontSize: 13,
+    color: theme.colors.textMuted,
+    fontStyle: "italic",
+  },
+  angelCard: {
+    backgroundColor: theme.colors.bg,
+    padding: 10,
+    borderRadius: theme.radii.sm,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 6,
+  },
+  angelName: {
+    color: theme.colors.text,
+    fontWeight: "700",
+    fontSize: 14,
+  },
+  angelStatus: {
+    color: theme.colors.textMuted,
+    fontSize: 12,
+  },
+  leaveReqBtn: {
+    backgroundColor: "rgba(99, 102, 241, 0.2)",
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 6,
+  },
+  leaveReqBtnText: {
+    color: theme.colors.primary,
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  inviteAngelBtn: {
+    backgroundColor: theme.colors.bg,
+    borderColor: theme.colors.primary,
+    borderWidth: 1,
+    padding: 10,
+    borderRadius: theme.radii.sm,
+    alignItems: "center",
+    marginBottom: 6,
+  },
+  inviteAngelBtnText: {
+    color: theme.colors.primary,
+    fontWeight: "600",
+    fontSize: 13,
+  },
+  actionBtn: {
+    backgroundColor: theme.colors.bg,
+    borderWidth: 1,
+    padding: 12,
+    borderRadius: theme.radii.sm,
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  actionBtnText: {
+    fontWeight: "700",
+    fontSize: 13,
+  },
+  reportInput: {
+    backgroundColor: theme.colors.bg,
+    borderColor: theme.colors.border,
+    borderWidth: 1,
+    borderRadius: theme.radii.sm,
+    padding: 10,
+    color: theme.colors.text,
+    fontSize: 14,
+  },
+  modalSub: {
+    fontSize: 12,
+    color: theme.colors.textMuted,
+    marginBottom: 12,
+  },
+  modalSubmitBtn: {
+    flex: 1,
+    backgroundColor: theme.colors.danger,
+    padding: 12,
+    borderRadius: theme.radii.sm,
+    alignItems: "center",
+  },
+  modalCancelBtn: {
+    flex: 1,
+    backgroundColor: theme.colors.border,
+    padding: 12,
+    borderRadius: theme.radii.sm,
+    alignItems: "center",
+  },
+  modalBtnText: {
+    color: "#fff",
+    fontWeight: "700",
+    fontSize: 14,
+  },
+});

@@ -1,0 +1,27 @@
+{
+  "name": "@halochat/server",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@halochat/db": "workspace:*",
+    "@halochat/shared": "workspace:*",
+    "@hono/node-server": "^1.13.8",
+    "drizzle-orm": "^0.39.3",
+    "hono": "^4.7.2",
+    "ws": "^8.18.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.9",
+    "@types/ws": "^8.5.14",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
+  }
+}
