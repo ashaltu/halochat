@@ -1,6 +1,8 @@
 {
   "name": "@halochat/shared",
   "version": "1.0.0",
+  "private": true,
+  "license": "UNLICENSED",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "module": "./dist/index.mjs",

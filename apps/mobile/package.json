@@ -1,6 +1,8 @@
 {
   "name": "@halochat/mobile",
   "version": "1.0.0",
+  "private": true,
+  "license": "UNLICENSED",
   "main": "expo-router/entry",
   "scripts": {
     "build": "tsc --noEmit",
