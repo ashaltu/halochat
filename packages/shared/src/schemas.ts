@@ -132,7 +132,7 @@ export const BlockUserSchema = z.object({
 export const ReportChatSchema = z.object({
   reason: z.string().min(1).max(200),
   details: z.string().max(1000).optional(),
-  evidence: z.array(z.string()).optional(),
+  evidence: z.array(z.string().min(1).max(65_536)).max(20).optional(),
 });
 
 // Support & Profile Correction Schemas
@@ -164,12 +164,29 @@ export const AdminResolveReportSchema = z.object({
   enforcement: z.nativeEnum(EnforcementAction).optional(),
 });
 
-export const AdminResolveCorrectionSchema = z.object({
-  decision: z.enum(["APPROVED", "REJECTED"]),
-  reason: z.string().min(1),
-  remediation: z.string().optional(),
-  noticePlan: z.string().optional(),
-});
+export const AdminResolveCorrectionSchema = z
+  .object({
+    decision: z.enum(["APPROVED", "REJECTED"]),
+    reason: z.string().min(1),
+    remediation: z.string().optional(),
+    noticePlan: z.string().optional(),
+  })
+  .superRefine((value, context) => {
+    if (value.decision === "APPROVED" && !value.remediation?.trim()) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["remediation"],
+        message: "Approved corrections require a remediation plan",
+      });
+    }
+    if (value.decision === "APPROVED" && !value.noticePlan?.trim()) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["noticePlan"],
+        message: "Approved corrections require a notice plan",
+      });
+    }
+  });
 
 export type SignUpInput = z.infer<typeof SignUpSchema>;
 export type SignInInput = z.infer<typeof SignInSchema>;

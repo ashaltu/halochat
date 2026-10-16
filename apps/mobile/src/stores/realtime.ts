@@ -49,7 +49,7 @@ export const useRealtimeStore = create<RealtimeState>((set, get) => ({
       return;
     }
 
-    const wsUrl = API_BASE_URL.replace(/^http/, "ws") + `/ws?token=${encodeURIComponent(token)}`;
+    const wsUrl = API_BASE_URL.replace(/^http/, "ws") + "/ws";
 
     try {
       ws = new WebSocket(wsUrl);

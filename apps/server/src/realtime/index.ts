@@ -2,11 +2,18 @@ import { WebSocket, WebSocketServer } from "ws";
 import { Server as HttpServer } from "node:http";
 import { validateSessionToken } from "../auth/index.js";
 
+type SessionValidator = (token: string) => Promise<{ user: { id: string } } | null>;
+
 export class WebSocketManager {
   private userSockets = new Map<string, Set<WebSocket>>();
   private socketUsers = new Map<WebSocket, string>();
   private wss: WebSocketServer | null = null;
   private heartbeatInterval: NodeJS.Timeout | null = null;
+
+  constructor(
+    private readonly sessionValidator: SessionValidator = validateSessionToken,
+    private readonly authenticationTimeoutMs = 5000
+  ) {}
 
   init(server: HttpServer) {
     this.wss = new WebSocketServer({ noServer: true });
@@ -20,49 +27,44 @@ export class WebSocketManager {
       }
     });
 
-    this.wss.on("connection", (ws: WebSocket, req) => {
+    this.wss.on("connection", (ws: WebSocket) => {
       let authenticatedUserId: string | null = null;
-
-      // Check query param token first
-      const url = new URL(req.url || "", `http://${req.headers.host || "localhost"}`);
-      const tokenFromQuery = url.searchParams.get("token");
-
-      if (tokenFromQuery) {
-        validateSessionToken(tokenFromQuery).then((sessionData) => {
-          if (sessionData) {
-            authenticatedUserId = sessionData.user.id;
-            this.registerSocket(authenticatedUserId, ws);
-            ws.send(JSON.stringify({ type: "connected", userId: authenticatedUserId }));
-          }
-        });
-      }
+      const authenticationTimeout = setTimeout(() => {
+        if (!authenticatedUserId) ws.close(4001, "Authentication timeout");
+      }, this.authenticationTimeoutMs);
 
       ws.on("message", async (data) => {
         try {
           const parsed = JSON.parse(data.toString());
-          if (parsed.type === "auth" && parsed.token) {
-            const sessionData = await validateSessionToken(parsed.token);
+          if (!authenticatedUserId && parsed.type === "auth" && typeof parsed.token === "string") {
+            const sessionData = await this.sessionValidator(parsed.token);
             if (sessionData) {
               authenticatedUserId = sessionData.user.id;
+              clearTimeout(authenticationTimeout);
               this.registerSocket(authenticatedUserId, ws);
               ws.send(JSON.stringify({ type: "authenticated", userId: authenticatedUserId }));
             } else {
               ws.send(JSON.stringify({ type: "error", message: "Invalid session token" }));
               ws.close(4001, "Unauthorized");
             }
-          } else if (parsed.type === "ping") {
+          } else if (authenticatedUserId && parsed.type === "ping") {
             ws.send(JSON.stringify({ type: "pong" }));
+          } else if (!authenticatedUserId) {
+            ws.send(JSON.stringify({ type: "error", message: "Authentication required" }));
+            ws.close(4001, "Unauthorized");
           }
-        } catch (err) {
-          // Ignore invalid JSON
+        } catch {
+          ws.close(1003, "Invalid message");
         }
       });
 
       ws.on("close", () => {
+        clearTimeout(authenticationTimeout);
         this.unregisterSocket(ws);
       });
 
       ws.on("error", () => {
+        clearTimeout(authenticationTimeout);
         this.unregisterSocket(ws);
       });
     });
@@ -124,6 +126,9 @@ export class WebSocketManager {
       clearInterval(this.heartbeatInterval);
     }
     this.wss?.close();
+    this.wss = null;
+    this.userSockets.clear();
+    this.socketUsers.clear();
   }
 }
 

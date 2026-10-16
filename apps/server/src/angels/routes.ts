@@ -49,6 +49,83 @@ export const angelsRouter = new Hono<AppEnv>();
 
 angelsRouter.use("*", authMiddleware);
 
+type ScopeImpact = {
+  chatId: string;
+  partner: { id: string; username: string; displayName: string };
+  purpose: string;
+  effect: "GAIN" | "LOSE";
+};
+
+async function getScopeImpacts(
+  db: Awaited<ReturnType<typeof getDb>>,
+  assignment: typeof angelAssignments.$inferSelect,
+  currentUser: typeof users.$inferSelect,
+  personConditions: PersonCondition[],
+  purposeCategories: string[]
+) {
+  if (assignment.status !== "ACTIVE") return [] as ScopeImpact[];
+
+  const activeChats = await db
+    .select()
+    .from(chats)
+    .where(
+      and(
+        or(eq(chats.requesterUserId, currentUser.id), eq(chats.recipientUserId, currentUser.id)),
+        eq(chats.status, "ACTIVE")
+      )
+    );
+  const impacts: ScopeImpact[] = [];
+
+  for (const chat of activeChats) {
+    const partnerId =
+      chat.requesterUserId === currentUser.id ? chat.recipientUserId : chat.requesterUserId;
+    const partner = (await db.select().from(users).where(eq(users.id, partnerId)))[0];
+    if (!partner) continue;
+
+    const isMatch = matchesAngelAssignment(
+      {
+        id: assignment.id,
+        userId: currentUser.id,
+        angelUserId: assignment.angelUserId,
+        status: assignment.status,
+        conditions: { personConditions, purposeCategories, combination: "OR" },
+      },
+      currentUser,
+      partner,
+      chat.purpose,
+      false
+    );
+    const existingAccess = await db
+      .select()
+      .from(chatAngelAccess)
+      .where(
+        and(
+          eq(chatAngelAccess.chatId, chat.id),
+          eq(chatAngelAccess.angelAssignmentId, assignment.id),
+          isNull(chatAngelAccess.authorizedUntil)
+        )
+      );
+
+    if (isMatch && existingAccess.length === 0) {
+      impacts.push({
+        chatId: chat.id,
+        partner: { id: partner.id, username: partner.username, displayName: partner.displayName },
+        purpose: chat.purpose,
+        effect: "GAIN",
+      });
+    } else if (!isMatch && existingAccess.length > 0) {
+      impacts.push({
+        chatId: chat.id,
+        partner: { id: partner.id, username: partner.username, displayName: partner.displayName },
+        purpose: chat.purpose,
+        effect: "LOSE",
+      });
+    }
+  }
+
+  return impacts;
+}
+
 // --- User Angel Management ---
 
 angelsRouter.post("/me/angels", async (c) => {
@@ -160,6 +237,44 @@ angelsRouter.post("/me/angels", async (c) => {
   return c.json({ success: true, assignmentId }, 201);
 });
 
+angelsRouter.post("/me/angels/:assignmentId/scope-preview", async (c) => {
+  const currentUser = c.get("user");
+  const assignmentId = c.req.param("assignmentId");
+  const body = await c.req.json().catch(() => ({}));
+  const parseResult = UpdateAngelScopeSchema.safeParse(body);
+  if (!parseResult.success) {
+    return c.json(
+      { code: "VALIDATION_ERROR", errors: parseResult.error.flatten().fieldErrors },
+      400
+    );
+  }
+
+  const db = await getDb();
+  const assignment = (
+    await db
+      .select()
+      .from(angelAssignments)
+      .where(
+        and(
+          eq(angelAssignments.id, assignmentId),
+          eq(angelAssignments.userId, currentUser.id)
+        )
+      )
+  )[0];
+  if (!assignment) {
+    return c.json({ code: "NOT_FOUND", message: "Assignment not found" }, 404);
+  }
+
+  const impacts = await getScopeImpacts(
+    db,
+    assignment,
+    currentUser,
+    parseResult.data.personConditions as PersonCondition[],
+    parseResult.data.purposeCategories
+  );
+  return c.json({ impacts });
+});
+
 angelsRouter.patch("/me/angels/:assignmentId", async (c) => {
   const currentUser = c.get("user");
   const assignmentId = c.req.param("assignmentId");
@@ -214,86 +329,52 @@ angelsRouter.patch("/me/angels/:assignmentId", async (c) => {
     });
   }
 
-  // Handle D9: applyToExisting opt-in
   if (applyToExisting && assignment.status === "ACTIVE") {
-    // Find active chats for currentUser
-    const activeChats = await db
-      .select()
-      .from(chats)
-      .where(
-        and(
-          or(eq(chats.requesterUserId, currentUser.id), eq(chats.recipientUserId, currentUser.id)),
-          eq(chats.status, "ACTIVE")
-        )
-      );
-
-    for (const chat of activeChats) {
-      const partnerId =
-        chat.requesterUserId === currentUser.id ? chat.recipientUserId : chat.requesterUserId;
-      const partner = (await db.select().from(users).where(eq(users.id, partnerId)))[0];
-
-      if (!partner) continue;
-
-      const mockAssignment = {
-        id: assignment.id,
-        userId: currentUser.id,
-        angelUserId: assignment.angelUserId,
-        status: assignment.status,
-        conditions: {
-          personConditions: personConditions as PersonCondition[],
-          purposeCategories,
-          combination: "OR" as const,
-        },
-      };
-
-      const isMatch = matchesAngelAssignment(
-        mockAssignment,
-        currentUser,
-        partner,
-        "General", // fallback evaluation
-        false
-      );
-
+    const impacts = await getScopeImpacts(
+      db,
+      assignment,
+      currentUser,
+      personConditions as PersonCondition[],
+      purposeCategories
+    );
+    for (const impact of impacts) {
       const existingAccess = await db
         .select()
         .from(chatAngelAccess)
         .where(
           and(
-            eq(chatAngelAccess.chatId, chat.id),
-            eq(chatAngelAccess.angelUserId, assignment.angelUserId),
+            eq(chatAngelAccess.chatId, impact.chatId),
+            eq(chatAngelAccess.angelAssignmentId, assignment.id),
             isNull(chatAngelAccess.authorizedUntil)
           )
         );
 
-      if (isMatch && existingAccess.length === 0) {
-        // Grant access from now forward (D9)
+      if (impact.effect === "GAIN" && existingAccess.length === 0) {
         await db.insert(chatAngelAccess).values({
           id: crypto.randomUUID(),
-          chatId: chat.id,
+          chatId: impact.chatId,
           angelUserId: assignment.angelUserId,
           angelAssignmentId: assignment.id,
           authorizedFrom: new Date(),
         });
-        await db.update(chats).set({ mode: "PROTECTED" }).where(eq(chats.id, chat.id));
-      } else if (!isMatch && existingAccess.length > 0) {
-        // Revoke access immediately (D9)
+        await db.update(chats).set({ mode: "PROTECTED" }).where(eq(chats.id, impact.chatId));
+      } else if (impact.effect === "LOSE" && existingAccess.length > 0) {
         await db
           .update(chatAngelAccess)
           .set({ authorizedUntil: new Date() })
           .where(eq(chatAngelAccess.id, existingAccess[0].id));
 
-        // Check if other angels remain
         const remaining = await db
           .select()
           .from(chatAngelAccess)
           .where(
             and(
-              eq(chatAngelAccess.chatId, chat.id),
+              eq(chatAngelAccess.chatId, impact.chatId),
               isNull(chatAngelAccess.authorizedUntil)
             )
           );
         if (remaining.length === 0) {
-          await db.update(chats).set({ mode: "COMFORT" }).where(eq(chats.id, chat.id));
+          await db.update(chats).set({ mode: "COMFORT" }).where(eq(chats.id, impact.chatId));
         }
       }
     }

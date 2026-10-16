@@ -50,6 +50,8 @@ describe("HaloChat MVP Integration Tests", () => {
   let fatimaId: string;
   let saraToken: string;
   let saraId: string;
+  let fatimaAssignmentId: string;
+  let saraAssignmentId: string;
 
   describe("1. User Registration & Auth (D2, D16)", () => {
     it("rejects under-13 registration", async () => {
@@ -158,12 +160,21 @@ describe("HaloChat MVP Integration Tests", () => {
       saraToken = res.body.session.token;
       saraId = res.body.user.id;
     });
+
+    it("signs in through Better Auth with a username", async () => {
+      const res = await api("/api/auth/sign-in/email", {
+        method: "POST",
+        body: { emailOrUsername: "aisha_m", password: "password123" },
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body.user.id).toBe(aishaId);
+      expect(res.body.session.token).toBeTruthy();
+      aishaToken = res.body.session.token;
+    });
   });
 
   describe("2. Angel Assignment & Scope Configuration (D1, D8, D12)", () => {
-    let fatimaAssignmentId: string;
-    let saraAssignmentId: string;
-
     it("Aisha invites Fatima as Angel (status PENDING)", async () => {
       const res = await api("/api/v1/me/angels", {
         method: "POST",
@@ -291,6 +302,23 @@ describe("HaloChat MVP Integration Tests", () => {
       expect(chat.mode).toBe("PROTECTED");
       expect(chat.ownAngels.length).toBe(0); // Omar has no Angels
       // Omar must not receive Fatima or Sara's names or counts
+    });
+
+    it("previews existing chats that would lose Angel access", async () => {
+      const res = await api(`/api/v1/me/angels/${fatimaAssignmentId}/scope-preview`, {
+        method: "POST",
+        token: aishaToken,
+        body: {
+          personConditions: [],
+          purposeCategories: [],
+          applyToExisting: true,
+        },
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body.impacts).toContainEqual(
+        expect.objectContaining({ chatId, effect: "LOSE" })
+      );
     });
   });
 

@@ -7,12 +7,21 @@ const app = document.getElementById("app")!;
 const nav = document.getElementById("main-nav")!;
 const authStatus = document.getElementById("auth-status")!;
 
+function html(value: unknown) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
 async function init() {
   try {
     const sessionRes = await api.getSession();
     if (sessionRes.user && sessionRes.user.role === "admin") {
       currentUser = sessionRes.user;
-      renderAdmin();
+      currentUser.twoFactorEnabled ? renderAdmin() : renderMfaEnrollment();
     } else {
       renderLogin();
     }
@@ -53,14 +62,86 @@ function renderLogin() {
 
     try {
       const res = await api.signIn(username, password);
+      if (res.twoFactorRequired) {
+        renderMfaChallenge();
+        return;
+      }
       if (res.user.role !== "admin") {
         errEl.textContent = "Access denied: Account is not an administrator.";
         return;
       }
       currentUser = res.user;
-      renderAdmin();
+      currentUser.twoFactorEnabled ? renderAdmin() : renderMfaEnrollment();
     } catch (err: any) {
       errEl.textContent = err.message || "Failed to sign in.";
+    }
+  });
+}
+
+function renderMfaChallenge() {
+  nav.style.display = "none";
+  app.innerHTML = `
+    <div class="card" style="max-width: 400px; margin: 4rem auto;">
+      <div class="card-header"><h2 class="card-title">Two-Factor Verification</h2></div>
+      <form id="mfa-challenge-form">
+        <label>Authenticator code</label>
+        <input id="mfa-challenge-code" inputmode="numeric" autocomplete="one-time-code" required />
+        <button type="submit" class="btn" style="width: 100%; margin-top: 1rem;">Verify</button>
+      </form>
+      <div id="mfa-error" style="color: var(--danger); margin-top: 1rem;"></div>
+    </div>
+  `;
+  document.getElementById("mfa-challenge-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const code = (document.getElementById("mfa-challenge-code") as HTMLInputElement).value;
+    try {
+      await api.verifyTotp(code);
+      const session = await api.getSession();
+      if (!session.user || session.user.role !== "admin") throw new Error("Admin access required");
+      currentUser = session.user;
+      renderAdmin();
+    } catch (error: any) {
+      document.getElementById("mfa-error")!.textContent = error.message || "Invalid code";
+    }
+  });
+}
+
+function renderMfaEnrollment() {
+  nav.style.display = "none";
+  app.innerHTML = `
+    <div class="card" style="max-width: 520px; margin: 4rem auto;">
+      <div class="card-header"><h2 class="card-title">Administrator MFA Required</h2></div>
+      <p>Enter your password to create an authenticator secret before accessing support data.</p>
+      <form id="mfa-enroll-form">
+        <label>Current password</label>
+        <input type="password" id="mfa-enroll-password" required />
+        <button type="submit" class="btn" style="width: 100%; margin-top: 1rem;">Create MFA Secret</button>
+      </form>
+      <div id="mfa-enrollment-result"></div>
+      <div id="mfa-error" style="color: var(--danger); margin-top: 1rem;"></div>
+    </div>
+  `;
+  document.getElementById("mfa-enroll-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const password = (document.getElementById("mfa-enroll-password") as HTMLInputElement).value;
+    try {
+      const result = await api.enableTwoFactor(password);
+      const container = document.getElementById("mfa-enrollment-result")!;
+      container.innerHTML = `
+        <p><strong>Authenticator URI</strong></p>
+        <textarea readonly style="width: 100%; min-height: 5rem;">${html(result.totpURI)}</textarea>
+        <p><strong>Backup codes</strong></p>
+        <pre>${html(result.backupCodes.join("\n"))}</pre>
+        <p>Save these codes securely, add the URI to your authenticator, then sign out and sign in again.</p>
+        <button id="mfa-enrollment-signout" class="btn">Sign Out</button>
+      `;
+      document.getElementById("mfa-enrollment-signout")?.addEventListener("click", async () => {
+        await api.signOut();
+        currentUser = null;
+        renderLogin();
+      });
+    } catch (error: any) {
+      document.getElementById("mfa-error")!.textContent = error.message || "MFA setup failed";
     }
   });
 }
@@ -70,7 +151,7 @@ function renderAdmin() {
   authStatus.innerHTML = `
     <div style="display: flex; align-items: center; gap: 1rem;">
       <span style="font-size: 0.875rem; color: var(--text-muted);">
-        Signed in as <strong style="color: var(--text);">${currentUser.username}</strong>
+        Signed in as <strong style="color: var(--text);">${html(currentUser.username)}</strong>
       </span>
       <button id="logout-btn" class="btn btn-secondary" style="padding: 0.25rem 0.75rem; font-size: 0.8rem;">
         Sign Out
@@ -168,12 +249,12 @@ function renderUsersTable(usersList: any[]) {
           .map(
             (u) => `
           <tr>
-            <td><strong>@${u.username}</strong></td>
-            <td>${u.displayName}</td>
-            <td>${u.email}</td>
-            <td>${u.sex}</td>
-            <td>${u.dateOfBirth}</td>
-            <td><span class="badge">${u.role}</span></td>
+            <td><strong>@${html(u.username)}</strong></td>
+            <td>${html(u.displayName)}</td>
+            <td>${html(u.email)}</td>
+            <td>${html(u.sex)}</td>
+            <td>${html(u.dateOfBirth)}</td>
+            <td><span class="badge">${html(u.role)}</span></td>
             <td>
               ${
                 u.banned
@@ -182,7 +263,7 @@ function renderUsersTable(usersList: any[]) {
               }
             </td>
             <td>
-              <button class="btn btn-secondary select-user-btn" data-id="${u.id}" style="padding: 0.2rem 0.5rem; font-size: 0.8rem;">
+              <button class="btn btn-secondary select-user-btn" data-id="${html(u.id)}" style="padding: 0.2rem 0.5rem; font-size: 0.8rem;">
                 Inspect
               </button>
             </td>
@@ -212,17 +293,17 @@ async function showUserDetail(userId: string) {
   card.innerHTML = `
     <div class="card">
       <div class="card-header">
-        <h3 class="card-title">User Operations: @${user.username} (${user.id})</h3>
+        <h3 class="card-title">User Operations: @${html(user.username)} (${html(user.id)})</h3>
         <button id="close-user-detail" class="btn btn-secondary" style="padding: 0.2rem 0.5rem;">Close</button>
       </div>
       <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 1.5rem;">
         <div>
-          <p><strong>Email:</strong> ${user.email}</p>
-          <p><strong>Display Name:</strong> ${user.displayName}</p>
-          <p><strong>Sex:</strong> ${user.sex}</p>
-          <p><strong>Date of Birth:</strong> ${user.dateOfBirth}</p>
+          <p><strong>Email:</strong> ${html(user.email)}</p>
+          <p><strong>Display Name:</strong> ${html(user.displayName)}</p>
+          <p><strong>Sex:</strong> ${html(user.sex)}</p>
+          <p><strong>Date of Birth:</strong> ${html(user.dateOfBirth)}</p>
           <p><strong>Active Sessions:</strong> ${sessions.length}</p>
-          ${user.banned ? `<p style="color: var(--danger);"><strong>Ban Reason:</strong> ${user.banReason}</p>` : ""}
+          ${user.banned ? `<p style="color: var(--danger);"><strong>Ban Reason:</strong> ${html(user.banReason)}</p>` : ""}
         </div>
         <div style="display: flex; flex-direction: column; gap: 0.75rem;">
           <button id="btn-revoke-sessions" class="btn btn-secondary">
@@ -307,11 +388,11 @@ async function renderReportsTab() {
             (r: any) => `
           <tr>
             <td>${new Date(r.report.createdAt).toLocaleString()}</td>
-            <td>@${r.reporter.username}</td>
-            <td>${r.report.reason}</td>
-            <td><span class="status-pill status-${r.report.state}">${r.report.state}</span></td>
+            <td>@${html(r.reporter.username)}</td>
+            <td>${html(r.report.reason)}</td>
+            <td><span class="status-pill status-${html(r.report.state)}">${html(r.report.state)}</span></td>
             <td>
-              <button class="btn btn-secondary inspect-report-btn" data-id="${r.report.id}" style="padding: 0.2rem 0.5rem; font-size: 0.8rem;">
+              <button class="btn btn-secondary inspect-report-btn" data-id="${html(r.report.id)}" style="padding: 0.2rem 0.5rem; font-size: 0.8rem;">
                 Review Evidence
               </button>
             </td>
@@ -342,22 +423,22 @@ async function showReportDetail(reportId: string) {
     report.evidence && report.evidence.length > 0
       ? `<div style="background: #0f172a; padding: 1rem; border-radius: 6px; margin: 1rem 0;">
           <h4 style="margin-bottom: 0.5rem;">Submitted Encrypted Messages Evidence:</h4>
-          <ul>${report.evidence.map((e: string) => `<li style="font-family: monospace; font-size: 0.85rem; margin-bottom: 0.25rem;">${e}</li>`).join("")}</ul>
+          <ul>${report.evidence.map((e: string) => `<li style="font-family: monospace; font-size: 0.85rem; margin-bottom: 0.25rem;">${html(e)}</li>`).join("")}</ul>
          </div>`
       : `<p style="color: var(--text-muted); margin: 1rem 0;">No attached message evidence.</p>`;
 
   card.innerHTML = `
     <div class="card">
       <div class="card-header">
-        <h3 class="card-title">Report Investigation: ${report.id}</h3>
+        <h3 class="card-title">Report Investigation: ${html(report.id)}</h3>
         <button id="close-report-detail" class="btn btn-secondary" style="padding: 0.2rem 0.5rem;">Close</button>
       </div>
       <div>
-        <p><strong>Reporter:</strong> @${reporter?.username} (${report.reporterId})</p>
-        <p><strong>Reported User:</strong> @${reportedUser?.username} (${report.reportedUserId})</p>
-        <p><strong>Reason:</strong> ${report.reason}</p>
-        <p><strong>Details:</strong> ${report.details || "None provided"}</p>
-        <p><strong>Status:</strong> <span class="status-pill status-${report.state}">${report.state}</span></p>
+        <p><strong>Reporter:</strong> @${html(reporter?.username)} (${html(report.reporterId)})</p>
+        <p><strong>Reported User:</strong> @${html(reportedUser?.username)} (${html(report.reportedUserId)})</p>
+        <p><strong>Reason:</strong> ${html(report.reason)}</p>
+        <p><strong>Details:</strong> ${html(report.details || "None provided")}</p>
+        <p><strong>Status:</strong> <span class="status-pill status-${html(report.state)}">${html(report.state)}</span></p>
         ${evidenceHtml}
         ${
           report.state === "PENDING"
@@ -368,7 +449,7 @@ async function showReportDetail(reportId: string) {
             <button id="btn-dismiss-report" class="btn btn-secondary">Dismiss</button>
           </div>
         `
-            : `<p style="color: var(--text-muted); margin-top: 1rem;"><strong>Resolution notes:</strong> ${report.resolutionNotes}</p>`
+            : `<p style="color: var(--text-muted); margin-top: 1rem;"><strong>Resolution notes:</strong> ${html(report.resolutionNotes)}</p>`
         }
       </div>
     </div>
@@ -441,12 +522,12 @@ async function renderCorrectionsTab() {
             (c: any) => `
           <tr>
             <td>${new Date(c.correction.createdAt).toLocaleString()}</td>
-            <td>@${c.user.username}</td>
-            <td><strong>${c.correction.field}</strong></td>
-            <td>${c.correction.proposedValue}</td>
-            <td><span class="status-pill status-${c.correction.status}">${c.correction.status}</span></td>
+            <td>@${html(c.user.username)}</td>
+            <td><strong>${html(c.correction.field)}</strong></td>
+            <td>${html(c.correction.proposedValue)}</td>
+            <td><span class="status-pill status-${html(c.correction.status)}">${html(c.correction.status)}</span></td>
             <td>
-              <button class="btn btn-secondary inspect-correction-btn" data-id="${c.correction.id}" style="padding: 0.2rem 0.5rem; font-size: 0.8rem;">
+              <button class="btn btn-secondary inspect-correction-btn" data-id="${html(c.correction.id)}" style="padding: 0.2rem 0.5rem; font-size: 0.8rem;">
                 Impact Analysis
               </button>
             </td>
@@ -480,23 +561,23 @@ async function showCorrectionDetail(id: string) {
   card.innerHTML = `
     <div class="card">
       <div class="card-header">
-        <h3 class="card-title">Correction Case: @${item.user.username}</h3>
+        <h3 class="card-title">Correction Case: @${html(item.user.username)}</h3>
         <button id="close-correction-detail" class="btn btn-secondary" style="padding: 0.2rem 0.5rem;">Close</button>
       </div>
       <div>
-        <p><strong>Field:</strong> ${item.correction.field}</p>
-        <p><strong>Current Value:</strong> ${item.correction.field === "DOB" ? item.user.dateOfBirth : item.user.sex}</p>
-        <p><strong>Proposed Value:</strong> ${item.correction.proposedValue}</p>
-        <p><strong>User's Reason:</strong> ${item.correction.reason}</p>
-        <p><strong>Status:</strong> <span class="status-pill status-${item.correction.status}">${item.correction.status}</span></p>
+        <p><strong>Field:</strong> ${html(item.correction.field)}</p>
+        <p><strong>Current Value:</strong> ${html(item.correction.field === "DOB" ? item.user.dateOfBirth : item.user.sex)}</p>
+        <p><strong>Proposed Value:</strong> ${html(item.correction.proposedValue)}</p>
+        <p><strong>User's Reason:</strong> ${html(item.correction.reason)}</p>
+        <p><strong>Status:</strong> <span class="status-pill status-${html(item.correction.status)}">${html(item.correction.status)}</span></p>
 
         <div class="impact-box">
           <h4 style="color: var(--warning); margin-bottom: 0.5rem;">Automated Impact Assessment (D16)</h4>
-          <p><strong>Summary:</strong> ${impact.summary}</p>
+          <p><strong>Summary:</strong> ${html(impact.summary)}</p>
           <p><strong>Impacted Chats Count:</strong> ${impact.impactedChats?.length || 0}</p>
           ${
             impact.impactedChats && impact.impactedChats.length > 0
-              ? `<ul>${impact.impactedChats.map((c: any) => `<li>Chat ${c.chatId}: ${c.reason}</li>`).join("")}</ul>`
+              ? `<ul>${impact.impactedChats.map((c: any) => `<li>Chat ${html(c.chatId)}: ${html(c.reason)}</li>`).join("")}</ul>`
               : ""
           }
         </div>
@@ -509,7 +590,7 @@ async function showCorrectionDetail(id: string) {
             <button id="btn-reject-correction" class="btn btn-danger">Reject</button>
           </div>
         `
-            : `<p style="color: var(--text-muted); margin-top: 1rem;"><strong>Resolution:</strong> ${item.correction.resolution}</p>`
+            : `<p style="color: var(--text-muted); margin-top: 1rem;"><strong>Resolution:</strong> ${html(item.correction.resolution)}</p>`
         }
       </div>
     </div>
@@ -572,10 +653,10 @@ async function renderAuditTab() {
             (log: any) => `
           <tr>
             <td>${new Date(log.createdAt).toLocaleString()}</td>
-            <td><strong>${log.action}</strong></td>
-            <td><code>${log.actorId || "SYSTEM"}</code></td>
-            <td>${log.targetType}:${log.targetId}</td>
-            <td><code style="font-size: 0.75rem;">${JSON.stringify(log.meta || {})}</code></td>
+            <td><strong>${html(log.action)}</strong></td>
+            <td><code>${html(log.actorId || "SYSTEM")}</code></td>
+            <td>${html(log.targetType)}:${html(log.targetId)}</td>
+            <td><code style="font-size: 0.75rem;">${html(JSON.stringify(log.meta || {}))}</code></td>
           </tr>
         `
           )

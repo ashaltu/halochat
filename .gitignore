@@ -5,6 +5,8 @@ dist
 .expo
 .next
 .ua
+test-results
+playwright-report
 *.log
 .env
 .env.local

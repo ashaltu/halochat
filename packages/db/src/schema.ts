@@ -13,13 +13,17 @@ export const users = pgTable("user", {
   id: text("id").primaryKey(),
   email: text("email").notNull().unique(),
   username: text("username").notNull().unique(),
+  displayUsername: text("display_username"),
   displayName: text("display_name").notNull(),
+  image: text("image"),
   dateOfBirth: text("date_of_birth").notNull(),
   sex: text("sex").notNull(), // 'MALE' | 'FEMALE'
   onboardingCompletedAt: timestamp("onboarding_completed_at"),
   role: text("role").notNull().default("user"), // 'user' | 'admin'
   banned: boolean("banned").notNull().default(false),
   banReason: text("ban_reason"),
+  banExpires: timestamp("ban_expires"),
+  twoFactorEnabled: boolean("two_factor_enabled").notNull().default(false),
   emailVerified: boolean("email_verified").notNull().default(false),
   enforcementAction: text("enforcement_action"),
   restrictedUntil: timestamp("restricted_until"),
@@ -37,6 +41,7 @@ export const sessions = pgTable("session", {
   expiresAt: timestamp("expires_at").notNull(),
   ipAddress: text("ip_address"),
   userAgent: text("user_agent"),
+  impersonatedBy: text("impersonated_by"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
@@ -50,6 +55,12 @@ export const accounts = pgTable("account", {
   accountId: text("account_id").notNull(),
   providerId: text("provider_id").notNull(),
   password: text("password"),
+  accessToken: text("access_token"),
+  refreshToken: text("refresh_token"),
+  idToken: text("id_token"),
+  accessTokenExpiresAt: timestamp("access_token_expires_at"),
+  refreshTokenExpiresAt: timestamp("refresh_token_expires_at"),
+  scope: text("scope"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
@@ -62,6 +73,15 @@ export const verifications = pgTable("verification", {
   expiresAt: timestamp("expires_at").notNull(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const twoFactors = pgTable("two_factor", {
+  id: text("id").primaryKey(),
+  userId: text("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  secret: text("secret").notNull(),
+  backupCodes: text("backup_codes").notNull(),
 });
 
 // 5. Angel Assignment

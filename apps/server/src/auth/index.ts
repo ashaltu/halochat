@@ -77,7 +77,7 @@ export async function authMiddleware(c: Context<AppEnv>, next: Next) {
   } else if (cookieHeader) {
     const match = cookieHeader.match(/better-auth\.session_token=([^;]+)/);
     if (match) {
-      token = match[1];
+      token = decodeURIComponent(match[1]).split(".")[0];
     }
   }
 
@@ -99,6 +99,9 @@ export async function adminMiddleware(c: Context<AppEnv>, next: Next) {
   const user = c.get("user");
   if (!user || user.role !== "admin") {
     return c.json({ code: "FORBIDDEN", message: "Admin access required" }, 403);
+  }
+  if (!user.twoFactorEnabled && process.env.NODE_ENV !== "test") {
+    return c.json({ code: "ADMIN_MFA_REQUIRED", message: "Administrator MFA is required" }, 403);
   }
   await next();
 }

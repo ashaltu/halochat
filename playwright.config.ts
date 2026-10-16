@@ -4,9 +4,17 @@ export default defineConfig({
   testDir: "./tests/e2e",
   fullyParallel: false,
   use: { baseURL: "http://127.0.0.1:4173" },
-  webServer: {
-    command: "pnpm --filter @halochat/help dev",
-    url: "http://127.0.0.1:4173",
-    reuseExistingServer: true,
-  },
+  webServer: [
+    {
+      command: "pnpm --filter @halochat/help dev",
+      url: "http://127.0.0.1:4173",
+      reuseExistingServer: true,
+    },
+    {
+      command: "REQUIRE_EMAIL_VERIFICATION=false pnpm --filter @halochat/server dev",
+      url: "http://127.0.0.1:3000/health",
+      reuseExistingServer: true,
+      timeout: 120_000,
+    },
+  ],
 });

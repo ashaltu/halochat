@@ -30,6 +30,7 @@ export default function ChatConversationScreen() {
   const [reportModalVisible, setReportModalVisible] = useState(false);
   const [reportReason, setReportReason] = useState("");
   const [reportDetails, setReportDetails] = useState("");
+  const [selectedEvidenceIds, setSelectedEvidenceIds] = useState<string[]>([]);
   const flatListRef = useRef<FlatList>(null);
 
   // Fetch Chat details
@@ -149,13 +150,16 @@ export default function ChatConversationScreen() {
         body: JSON.stringify({
           reason: reportReason,
           details: reportDetails,
-          evidence: (messagesData?.messages || []).slice(-5).map((m) => m.ciphertext),
+          evidence: (messagesData?.messages || [])
+            .filter((message) => selectedEvidenceIds.includes(message.id))
+            .map((message) => message.ciphertext),
         }),
       }),
     onSuccess: () => {
       setReportModalVisible(false);
       setReportReason("");
       setReportDetails("");
+      setSelectedEvidenceIds([]);
       alert("Report submitted for support staff review.");
     },
   });
@@ -288,7 +292,7 @@ export default function ChatConversationScreen() {
           <View style={styles.composerRow}>
             <TextInput
               style={styles.composerInput}
-              placeholder="Type an end-to-end encrypted message..."
+              placeholder="Type a message..."
               placeholderTextColor={theme.colors.textMuted}
               value={inputText}
               onChangeText={setInputText}
@@ -376,6 +380,7 @@ export default function ChatConversationScreen() {
                   style={[styles.actionBtn, { borderColor: theme.colors.warning }]}
                   onPress={() => {
                     setInfoModalVisible(false);
+                    setSelectedEvidenceIds([]);
                     setReportModalVisible(true);
                   }}
                 >
@@ -423,8 +428,33 @@ export default function ChatConversationScreen() {
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Report Conversation</Text>
             <Text style={styles.modalSub}>
-              Explicitly attaches recent encrypted messages as evidence for review.
+              Choose only the messages you want support staff to review. No messages are attached by default.
             </Text>
+
+            <Text style={styles.evidenceHeading}>Optional message evidence</Text>
+            <ScrollView style={styles.evidenceList} nestedScrollEnabled>
+              {messages.slice(-10).map((message) => {
+                const selected = selectedEvidenceIds.includes(message.id);
+                return (
+                  <TouchableOpacity
+                    key={message.id}
+                    style={[styles.evidenceItem, selected && styles.evidenceItemSelected]}
+                    onPress={() =>
+                      setSelectedEvidenceIds((current) =>
+                        selected
+                          ? current.filter((id) => id !== message.id)
+                          : [...current, message.id]
+                      )
+                    }
+                  >
+                    <Text style={styles.evidenceCheck}>{selected ? "☑" : "☐"}</Text>
+                    <Text style={styles.evidenceText} numberOfLines={2}>
+                      {message.ciphertext}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
 
             <TextInput
               style={styles.reportInput}
@@ -757,6 +787,38 @@ const styles = StyleSheet.create({
     padding: 10,
     color: theme.colors.text,
     fontSize: 14,
+  },
+  evidenceHeading: {
+    color: theme.colors.text,
+    fontSize: 13,
+    fontWeight: "700",
+    marginBottom: 6,
+  },
+  evidenceList: {
+    maxHeight: 150,
+    marginBottom: 10,
+  },
+  evidenceItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    borderRadius: theme.radii.sm,
+    padding: 8,
+    marginBottom: 6,
+  },
+  evidenceItemSelected: {
+    borderColor: theme.colors.warning,
+  },
+  evidenceCheck: {
+    color: theme.colors.warning,
+    fontSize: 16,
+  },
+  evidenceText: {
+    flex: 1,
+    color: theme.colors.text,
+    fontSize: 12,
   },
   modalSub: {
     fontSize: 12,

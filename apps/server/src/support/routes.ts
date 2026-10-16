@@ -31,6 +31,7 @@ import {
   Sex,
 } from "@halochat/shared";
 import { AppEnv } from "../types.js";
+import { sendEmail } from "../notifications/email.js";
 
 export const supportRouter = new Hono<AppEnv>();
 
@@ -152,7 +153,42 @@ supportRouter.get("/profile-corrections/mine", authMiddleware, async (c) => {
 export const adminRouter = new Hono<AppEnv>();
 adminRouter.use("*", authMiddleware, adminMiddleware);
 
+async function auditAdminRead(
+  adminId: string,
+  targetType: string,
+  targetId: string,
+  meta?: Record<string, unknown>
+) {
+  const db = await getDb();
+  await db.insert(auditLogs).values({
+    id: crypto.randomUUID(),
+    actorId: adminId,
+    action: AuditAction.ADMIN_SENSITIVE_READ,
+    targetType,
+    targetId,
+    meta,
+  });
+}
+
+async function sendOperationalNotice(to: string, subject: string, html: string) {
+  try {
+    return await sendEmail({ to, subject, html });
+  } catch {
+    return { delivered: false };
+  }
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
 adminRouter.get("/users", async (c) => {
+  const admin = c.get("user");
   const query = c.req.query("query")?.trim() || "";
   const db = await getDb();
 
@@ -181,10 +217,13 @@ adminRouter.get("/users", async (c) => {
     )
     .limit(50);
 
+  await auditAdminRead(admin.id, "user_search", query || "all", { resultCount: userList.length });
+
   return c.json({ users: userList });
 });
 
 adminRouter.get("/users/:id", async (c) => {
+  const admin = c.get("user");
   const userId = c.req.param("id");
   const db = await getDb();
 
@@ -215,6 +254,8 @@ adminRouter.get("/users/:id", async (c) => {
     .select({ id: sessions.id, expiresAt: sessions.expiresAt, createdAt: sessions.createdAt })
     .from(sessions)
     .where(eq(sessions.userId, userId));
+
+  await auditAdminRead(admin.id, "user", userId);
 
   return c.json({
     user: userRes[0],
@@ -274,7 +315,16 @@ adminRouter.post("/users/:id/enforcement", async (c) => {
     meta: { action, reason, durationDays },
   });
 
-  return c.json({ success: true, action });
+  const target = (await db.select({ email: users.email }).from(users).where(eq(users.id, userId)))[0];
+  const notice = target
+    ? await sendOperationalNotice(
+        target.email,
+        "HaloChat account action",
+        `<p>An administrator applied the following account action: ${escapeHtml(action)}.</p><p>Contact support if you believe this was an error.</p>`
+      )
+    : { delivered: false };
+
+  return c.json({ success: true, action, noticeDelivered: notice.delivered });
 });
 
 adminRouter.post("/users/:id/revoke-sessions", async (c) => {
@@ -305,10 +355,20 @@ adminRouter.post("/users/:id/revoke-sessions", async (c) => {
 });
 
 adminRouter.get("/reports", async (c) => {
+  const admin = c.get("user");
   const db = await getDb();
   const reportList = await db
     .select({
-      report: reports,
+      report: {
+        id: reports.id,
+        reporterId: reports.reporterId,
+        reportedUserId: reports.reportedUserId,
+        chatId: reports.chatId,
+        reason: reports.reason,
+        state: reports.state,
+        createdAt: reports.createdAt,
+        resolvedAt: reports.resolvedAt,
+      },
       reporter: {
         id: users.id,
         username: users.username,
@@ -319,10 +379,13 @@ adminRouter.get("/reports", async (c) => {
     .innerJoin(users, eq(reports.reporterId, users.id))
     .orderBy(desc(reports.createdAt));
 
+  await auditAdminRead(admin.id, "report_queue", "all", { resultCount: reportList.length });
+
   return c.json({ reports: reportList });
 });
 
 adminRouter.get("/reports/:id", async (c) => {
+  const admin = c.get("user");
   const reportId = c.req.param("id");
   const db = await getDb();
 
@@ -336,6 +399,8 @@ adminRouter.get("/reports/:id", async (c) => {
   const reportedUser = (
     await db.select().from(users).where(eq(users.id, report.reportedUserId))
   )[0];
+
+  await auditAdminRead(admin.id, "report", reportId);
 
   return c.json({
     report,
@@ -388,6 +453,24 @@ adminRouter.post("/reports/:id/resolve", async (c) => {
       .where(eq(users.id, report.reportedUserId));
 
     await db.delete(sessions).where(eq(sessions.userId, report.reportedUserId));
+  } else if (
+    enforcement === EnforcementAction.RESTRICT ||
+    enforcement === EnforcementAction.SUSPEND
+  ) {
+    await db
+      .update(users)
+      .set({
+        enforcementAction: enforcement,
+        restrictedUntil: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        updatedAt: now,
+      })
+      .where(eq(users.id, report.reportedUserId));
+    await db.delete(sessions).where(eq(sessions.userId, report.reportedUserId));
+  } else if (enforcement === EnforcementAction.WARN) {
+    await db
+      .update(users)
+      .set({ enforcementAction: enforcement, updatedAt: now })
+      .where(eq(users.id, report.reportedUserId));
   }
 
   await db.insert(auditLogs).values({
@@ -399,10 +482,31 @@ adminRouter.post("/reports/:id/resolve", async (c) => {
     meta: { decision, reason, enforcement },
   });
 
+  const reportedUser = (
+    await db.select({ email: users.email }).from(users).where(eq(users.id, report.reportedUserId))
+  )[0];
+  const notice = reportedUser
+    ? await sendOperationalNotice(
+        reportedUser.email,
+        "HaloChat safety review completed",
+        `<p>A safety review involving your account was completed.</p><p>Outcome: ${escapeHtml(enforcement || decision)}.</p><p>Contact support to appeal a serious action.</p>`
+      )
+    : { delivered: false };
+
+  await db.insert(auditLogs).values({
+    id: crypto.randomUUID(),
+    actorId: admin.id,
+    action: AuditAction.NOTICE_DISPATCH,
+    targetType: "report_notice",
+    targetId: reportId,
+    meta: { delivered: notice.delivered },
+  });
+
   return c.json({ success: true, decision });
 });
 
 adminRouter.get("/profile-corrections", async (c) => {
+  const admin = c.get("user");
   const db = await getDb();
   const list = await db
     .select({
@@ -420,10 +524,13 @@ adminRouter.get("/profile-corrections", async (c) => {
     .innerJoin(users, eq(profileCorrectionRequests.userId, users.id))
     .orderBy(desc(profileCorrectionRequests.createdAt));
 
+  await auditAdminRead(admin.id, "profile_correction_queue", "all", { resultCount: list.length });
+
   return c.json({ corrections: list });
 });
 
 adminRouter.get("/profile-corrections/:id/impact", async (c) => {
+  const admin = c.get("user");
   const id = c.req.param("id");
   const db = await getDb();
 
@@ -435,6 +542,8 @@ adminRouter.get("/profile-corrections/:id/impact", async (c) => {
   if (res.length === 0) {
     return c.json({ code: "NOT_FOUND", message: "Correction request not found" }, 404);
   }
+
+  await auditAdminRead(admin.id, "profile_correction_impact", id);
 
   return c.json({ impact: res[0].impactReport });
 });
@@ -491,13 +600,51 @@ adminRouter.post("/profile-corrections/:id/resolve", async (c) => {
     }
   }
 
+  const correctionUser = (
+    await db.select({ email: users.email }).from(users).where(eq(users.id, correction.userId))
+  )[0];
+  const requesterNotice = correctionUser
+    ? await sendOperationalNotice(
+        correctionUser.email,
+        "HaloChat profile correction decision",
+        `<p>Your profile correction request was ${escapeHtml(decision.toLowerCase())}.</p><p>${escapeHtml(reason)}</p>`
+      )
+    : { delivered: false };
+  const partnerNoticeResults: boolean[] = [];
+  if (decision === "APPROVED") {
+    const impact = correction.impactReport as {
+      impactedChats?: Array<{ partnerId: string }>;
+    };
+    const partnerIds = [...new Set((impact.impactedChats || []).map((item) => item.partnerId))];
+    for (const partnerId of partnerIds) {
+      const partner = (
+        await db.select({ email: users.email }).from(users).where(eq(users.id, partnerId))
+      )[0];
+      if (!partner) continue;
+      const result = await sendOperationalNotice(
+        partner.email,
+        "HaloChat conversation safeguard update",
+        "<p>Safeguard settings for one of your conversations were reviewed. Open HaloChat to see its current protection mode.</p>"
+      );
+      partnerNoticeResults.push(result.delivered);
+    }
+  }
+
   await db.insert(auditLogs).values({
     id: crypto.randomUUID(),
     actorId: admin.id,
     action: AuditAction.PROFILE_CORRECTION_RESOLVE,
     targetType: "profile_correction_request",
     targetId: id,
-    meta: { decision, reason, remediation, noticePlan },
+    meta: {
+      decision,
+      reason,
+      remediation,
+      noticePlan,
+      requesterNoticeDelivered: requesterNotice.delivered,
+      partnerNoticesAttempted: partnerNoticeResults.length,
+      partnerNoticesDelivered: partnerNoticeResults.filter(Boolean).length,
+    },
   });
 
   return c.json({ success: true, decision });

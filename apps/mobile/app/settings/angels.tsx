@@ -9,6 +9,7 @@ import {
   Modal,
   TextInput,
   Switch,
+  Alert,
 } from "react-native";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { theme } from "../../src/theme.js";
@@ -84,6 +85,39 @@ export default function MyAngelsScreen() {
       setEditingAssignment(null);
       queryClient.invalidateQueries({ queryKey: ["my-protection"] });
       alert("Angel protection scope updated.");
+    },
+  });
+
+  const previewScopeMutation = useMutation({
+    mutationFn: () =>
+      apiRequest<{
+        impacts: Array<{
+          chatId: string;
+          partner: { username: string; displayName: string };
+          purpose: string;
+          effect: "GAIN" | "LOSE";
+        }>;
+      }>(`/api/v1/me/angels/${editingAssignment.id}/scope-preview`, {
+        method: "POST",
+        body: JSON.stringify({ personConditions, purposeCategories, applyToExisting: true }),
+      }),
+    onSuccess: ({ impacts }) => {
+      const details = impacts.length
+        ? impacts
+            .map(
+              (impact) =>
+                `${impact.effect === "GAIN" ? "+" : "−"} @${impact.partner.username} · ${impact.purpose}`
+            )
+            .join("\n")
+        : "No active chats would change.";
+      Alert.alert(
+        "Review existing chat access",
+        `${details}\n\nNew access starts now and never includes earlier messages. Removed access ends immediately.`,
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Confirm Changes", onPress: () => updateScopeMutation.mutate() },
+        ]
+      );
     },
   });
 
@@ -305,8 +339,12 @@ export default function MyAngelsScreen() {
             <View style={styles.btnRow}>
               <TouchableOpacity
                 style={[styles.btn, { backgroundColor: theme.colors.primary }]}
-                onPress={() => updateScopeMutation.mutate()}
-                disabled={updateScopeMutation.isPending}
+                onPress={() =>
+                  applyToExisting
+                    ? previewScopeMutation.mutate()
+                    : updateScopeMutation.mutate()
+                }
+                disabled={updateScopeMutation.isPending || previewScopeMutation.isPending}
               >
                 <Text style={styles.btnText}>Save Scope</Text>
               </TouchableOpacity>

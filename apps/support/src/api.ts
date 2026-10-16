@@ -26,6 +26,16 @@ export const api = {
       body: JSON.stringify({ emailOrUsername, password }),
     }),
   signOut: () => request("/auth/sign-out", { method: "POST" }),
+  enableTwoFactor: (password: string) =>
+    request("/auth/two-factor/enable", {
+      method: "POST",
+      body: JSON.stringify({ password, issuer: "HaloChat" }),
+    }),
+  verifyTotp: (code: string) =>
+    request("/auth/two-factor/verify-totp", {
+      method: "POST",
+      body: JSON.stringify({ code, trustDevice: false }),
+    }),
 
   // Admin Users
   searchUsers: (query: string = "") => request(`/v1/admin/users?query=${encodeURIComponent(query)}`),

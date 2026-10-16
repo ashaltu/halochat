@@ -17,7 +17,7 @@ const ARTICLES = [
   },
   {
     title: "4. End-to-End Encryption & Privacy",
-    body: "Message content is encrypted directly on your device. The HaloChat server enforces access and routing without possessing keys to read your plaintext messages or private whispers.",
+    body: "This source-build preview does not yet provide end-to-end encrypted messaging and must not be used for sensitive conversations. E2EE remains a launch requirement.",
   },
   {
     title: "5. Profile Corrections (DOB & Sex)",
