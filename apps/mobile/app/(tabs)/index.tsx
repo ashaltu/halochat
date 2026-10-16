@@ -24,6 +24,7 @@ export default function ChatsListScreen() {
   const { data, isLoading, refetch, isRefetching } = useQuery({
     queryKey: ["chats"],
     queryFn: () => apiRequest<{ chats: any[] }>("/api/v1/chats"),
+    refetchInterval: 10000,
   });
 
   useEffect(() => {

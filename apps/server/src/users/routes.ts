@@ -1,7 +1,8 @@
 import { Hono } from "hono";
-import { getDb, users, blocks, protectionSettings, eq, or, ilike, and, notInArray, ne } from "@halochat/db";
+import crypto from "node:crypto";
+import { getDb, users, blocks, protectionSettings, pushTokens, eq, or, ilike, and } from "@halochat/db";
 import { authMiddleware } from "../auth/index.js";
-import { UpdateProfileSchema } from "@halochat/shared";
+import { PushTokenSchema, UpdateProfileSchema } from "@halochat/shared";
 import { AppEnv } from "../types.js";
 
 export const usersRouter = new Hono<AppEnv>();
@@ -61,7 +62,21 @@ usersRouter.patch("/me", async (c) => {
   return c.json({ user: updatedUser[0] });
 });
 
-usersRouter.get("/search", async (c) => {
+usersRouter.post("/me/push-tokens", async (c) => {
+  const currentUser = c.get("user");
+  const parsed = PushTokenSchema.safeParse(await c.req.json().catch(() => ({})));
+  if (!parsed.success) return c.json({ code: "VALIDATION_ERROR" }, 400);
+  const db = await getDb();
+  const existing = await db.select().from(pushTokens).where(eq(pushTokens.expoToken, parsed.data.expoToken));
+  if (existing[0]) {
+    await db.update(pushTokens).set({ userId: currentUser.id, platform: parsed.data.platform, updatedAt: new Date() }).where(eq(pushTokens.id, existing[0].id));
+  } else {
+    await db.insert(pushTokens).values({ id: crypto.randomUUID(), userId: currentUser.id, ...parsed.data });
+  }
+  return c.json({ success: true });
+});
+
+usersRouter.get("/users/search", async (c) => {
   const currentUser = c.get("user");
   const query = c.req.query("q")?.trim() || "";
   if (!query) {

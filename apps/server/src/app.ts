@@ -49,8 +49,7 @@ export function createApp() {
   v1.route("/config", configRouter);
 
   // Users & Me
-  v1.route("/users", usersRouter);
-  v1.route("/me", usersRouter);
+  v1.route("/", usersRouter);
 
   // Angels
   v1.route("/", angelsRouter);

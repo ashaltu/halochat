@@ -63,9 +63,15 @@ export const UpdateProfileSchema = z.object({
   onboardingCompleted: z.boolean().optional(),
 });
 
+export const PushTokenSchema = z.object({
+  expoToken: z.string().startsWith("ExponentPushToken[").or(z.string().startsWith("ExpoPushToken[")),
+  platform: z.enum(["ios", "android", "web"]),
+});
+
 // Angel Assignment & Scope Schemas
 export const InviteAngelSchema = z.object({
   angelUserId: z.string().min(1),
+  useEarlyReset: z.boolean().default(false),
 });
 
 export const UpdateAngelScopeSchema = z.object({

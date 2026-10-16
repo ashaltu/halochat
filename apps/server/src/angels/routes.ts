@@ -22,6 +22,7 @@ import {
   inArray,
   desc,
   isNull,
+  gt,
 } from "@halochat/db";
 import { authMiddleware } from "../auth/index.js";
 import {
@@ -61,12 +62,47 @@ angelsRouter.post("/me/angels", async (c) => {
     );
   }
 
-  const { angelUserId } = parseResult.data;
+  const { angelUserId, useEarlyReset } = parseResult.data;
   if (angelUserId === currentUser.id) {
     return c.json({ code: "INVALID_TARGET", message: "You cannot assign yourself as your Angel" }, 400);
   }
 
   const db = await getDb();
+
+  const cooldowns = await db
+    .select()
+    .from(angelTrustCooldowns)
+    .where(
+      and(
+        eq(angelTrustCooldowns.userId, currentUser.id),
+        gt(angelTrustCooldowns.cooldownUntil, new Date())
+      )
+    )
+    .orderBy(desc(angelTrustCooldowns.removedAt));
+  const cooldown = cooldowns[0];
+  if (cooldown && !useEarlyReset) {
+    return c.json({
+      code: "ANGEL_COOLDOWN",
+      message: "Angel replacement is in a 30-day trust cooldown",
+      cooldownUntil: cooldown.cooldownUntil,
+      resetsRemaining: cooldown.resetsRemaining,
+    }, 409);
+  }
+  if (cooldown && useEarlyReset) {
+    const periodExpired = cooldown.resetPeriodStart < new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+    const resetsRemaining = periodExpired ? 3 : cooldown.resetsRemaining;
+    if (resetsRemaining < 1) {
+      return c.json({ code: "NO_EARLY_RESETS", message: "No early resets remain" }, 409);
+    }
+    await db
+      .update(angelTrustCooldowns)
+      .set({
+        cooldownUntil: new Date(),
+        resetsRemaining: resetsRemaining - 1,
+        resetPeriodStart: periodExpired ? new Date() : cooldown.resetPeriodStart,
+      })
+      .where(eq(angelTrustCooldowns.id, cooldown.id));
+  }
 
   const targetUser = await db.select().from(users).where(eq(users.id, angelUserId));
   if (targetUser.length === 0) {

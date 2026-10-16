@@ -109,6 +109,10 @@ export class WebSocketManager {
     }
   }
 
+  hasConnections(userId: string) {
+    return (this.userSockets.get(userId)?.size || 0) > 0;
+  }
+
   broadcastToUsers(userIds: string[], payload: unknown) {
     for (const id of userIds) {
       this.sendToUser(id, payload);

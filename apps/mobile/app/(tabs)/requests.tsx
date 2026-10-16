@@ -29,6 +29,7 @@ export default function RequestsScreen() {
   const { data, isLoading, refetch } = useQuery({
     queryKey: ["requests", box],
     queryFn: () => apiRequest<{ requests: any[] }>(`/api/v1/requests?box=${box}`),
+    refetchInterval: 10000,
   });
 
   // Fetch Purposes from config

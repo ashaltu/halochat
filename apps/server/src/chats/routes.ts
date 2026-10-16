@@ -31,6 +31,7 @@ import {
 } from "@halochat/shared";
 import { wsManager } from "../realtime/index.js";
 import { AppEnv } from "../types.js";
+import { notifyOfflineUsers } from "../notifications/push.js";
 
 export const chatsRouter = new Hono<AppEnv>();
 
@@ -341,6 +342,12 @@ chatsRouter.post("/:id/messages", async (c) => {
       message: msgPayload,
     });
   }
+
+  await notifyOfflineUsers(
+    [chat.requesterUserId, chat.recipientUserId, ...activeAngels.map((access) => access.angelUserId)],
+    "New HaloChat message",
+    { type: WsEventType.MESSAGE_NEW, chatId }
+  );
 
   return c.json({ message: msgPayload }, 201);
 });

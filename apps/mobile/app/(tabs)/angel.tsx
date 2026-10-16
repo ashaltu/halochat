@@ -37,6 +37,7 @@ export default function AngelTabScreen() {
         activeChats: any[];
         pendingAccessRequests: any[];
       }>("/api/v1/angel/dashboard"),
+    refetchInterval: 10000,
   });
 
   // Assignment Mutations

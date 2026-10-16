@@ -5,6 +5,7 @@ import { useAuthStore } from "../src/stores/auth.js";
 import { useRealtimeStore } from "../src/stores/realtime.js";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
+import { registerPushToken } from "../src/push.js";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -26,6 +27,7 @@ export default function RootLayout() {
   useEffect(() => {
     if (session) {
       connect();
+      void registerPushToken();
     } else {
       disconnect();
     }
