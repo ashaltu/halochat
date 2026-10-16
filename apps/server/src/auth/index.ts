@@ -60,6 +60,10 @@ export async function validateSessionToken(token: string) {
     return null;
   }
 
+  if (user.restrictedUntil && new Date(user.restrictedUntil) > new Date()) {
+    return null;
+  }
+
   return { session, user };
 }
 

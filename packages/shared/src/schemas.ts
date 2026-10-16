@@ -50,6 +50,14 @@ export const SignInSchema = z.object({
   password: z.string().min(1),
 });
 
+export const EmailSchema = z.object({ email: z.string().email() });
+
+export const TokenSchema = z.object({ token: z.string().min(32) });
+
+export const ResetPasswordSchema = TokenSchema.extend({
+  password: z.string().min(8, "Password must be at least 8 characters"),
+});
+
 export const UpdateProfileSchema = z.object({
   displayName: z.string().min(1).max(50).optional(),
   onboardingCompleted: z.boolean().optional(),

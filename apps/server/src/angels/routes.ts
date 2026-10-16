@@ -1034,7 +1034,7 @@ angelsRouter.post("/angel/access-requests/:id/accept", async (c) => {
     if (remaining.length === 0) {
       await db.update(chats).set({ mode: "COMFORT" }).where(eq(chats.id, accessReq.chatId));
     }
-  } else if (accessReq.type === "REJOIN") {
+  } else if (accessReq.type === "REJOIN" || accessReq.type === "INVITE") {
     // Find angel assignment
     const assignmentRes = await db
       .select()
@@ -1056,6 +1056,14 @@ angelsRouter.post("/angel/access-requests/:id/accept", async (c) => {
       });
 
       await db.update(chats).set({ mode: "PROTECTED" }).where(eq(chats.id, accessReq.chatId));
+
+      const chatRes = await db.select().from(chats).where(eq(chats.id, accessReq.chatId));
+      if (chatRes[0]) {
+        wsManager.broadcastToUsers(
+          [chatRes[0].requesterUserId, chatRes[0].recipientUserId],
+          { type: WsEventType.CHAT_UPDATED, chatId: accessReq.chatId, mode: "PROTECTED" }
+        );
+      }
     }
   }
 
@@ -1139,18 +1147,8 @@ export async function reevaluateContactRequest(requestId: string) {
       shortReason: v.shortReason || undefined,
     }));
 
-  // Fetch thresholds
-  const recSetting = await db
-    .select()
-    .from(protectionSettings)
-    .where(eq(protectionSettings.userId, request.recipientUserId));
-  const reqSetting = await db
-    .select()
-    .from(protectionSettings)
-    .where(eq(protectionSettings.userId, request.requesterUserId));
-
-  const recipientThreshold = (recSetting[0]?.approvalThreshold || "ANY_ONE") as ApprovalThreshold;
-  const requesterThreshold = (reqSetting[0]?.approvalThreshold || "ANY_ONE") as ApprovalThreshold;
+  const recipientThreshold = request.recipientApprovalThreshold as ApprovalThreshold;
+  const requesterThreshold = request.requesterApprovalThreshold as ApprovalThreshold;
 
   const nextState = evaluateContactRequestState({
     recipientThreshold,
@@ -1172,6 +1170,7 @@ export async function reevaluateContactRequest(requestId: string) {
         recipientUserId: request.recipientUserId,
         mode,
         status: "ACTIVE",
+        purpose: request.purpose,
       });
 
       // Grant initial access to all approved angels

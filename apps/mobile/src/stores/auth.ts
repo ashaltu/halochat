@@ -1,5 +1,29 @@
 import { create } from "zustand";
+import { Platform } from "react-native";
+import * as SecureStore from "expo-secure-store";
 import { apiRequest, setAuthToken } from "../api/client.js";
+
+const SESSION_KEY = "halochat.session";
+
+async function saveSession(session: Session | null) {
+  const value = session ? JSON.stringify(session) : null;
+  if (Platform.OS === "web") {
+    if (value) localStorage.setItem(SESSION_KEY, value);
+    else localStorage.removeItem(SESSION_KEY);
+  } else if (value) {
+    await SecureStore.setItemAsync(SESSION_KEY, value);
+  } else {
+    await SecureStore.deleteItemAsync(SESSION_KEY);
+  }
+}
+
+async function loadSession() {
+  const value =
+    Platform.OS === "web"
+      ? localStorage.getItem(SESSION_KEY)
+      : await SecureStore.getItemAsync(SESSION_KEY);
+  return value ? (JSON.parse(value) as Session) : null;
+}
 
 export interface User {
   id: string;
@@ -35,11 +59,14 @@ export const useAuthStore = create<AuthState>((set) => ({
   setUser: (user) => set({ user }),
   setSession: (session) => {
     setAuthToken(session ? session.token : null);
+    void saveSession(session);
     set({ session });
   },
   checkSession: async () => {
     set({ isLoading: true });
     try {
+      const savedSession = await loadSession();
+      setAuthToken(savedSession?.token || null);
       const res = await apiRequest<{ session: Session | null; user: User | null }>(
         "/api/auth/get-session"
       );
@@ -62,6 +89,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       // Ignore network errors on logout
     }
     setAuthToken(null);
+    await saveSession(null);
     set({ user: null, session: null });
   },
 }));

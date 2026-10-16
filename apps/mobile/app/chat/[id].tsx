@@ -127,7 +127,7 @@ export default function ChatConversationScreen() {
         body: JSON.stringify({ angelAssignmentId }),
       }),
     onSuccess: () => {
-      alert("Angel invited into conversation.");
+      alert("Invitation sent. The chat becomes Protected after your Angel accepts.");
       setInfoModalVisible(false);
       queryClient.invalidateQueries({ queryKey: ["chat", id] });
     },

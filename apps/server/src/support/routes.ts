@@ -188,12 +188,33 @@ adminRouter.get("/users/:id", async (c) => {
   const userId = c.req.param("id");
   const db = await getDb();
 
-  const userRes = await db.select().from(users).where(eq(users.id, userId));
+  const userRes = await db
+    .select({
+      id: users.id,
+      email: users.email,
+      username: users.username,
+      displayName: users.displayName,
+      dateOfBirth: users.dateOfBirth,
+      sex: users.sex,
+      role: users.role,
+      banned: users.banned,
+      banReason: users.banReason,
+      emailVerified: users.emailVerified,
+      enforcementAction: users.enforcementAction,
+      restrictedUntil: users.restrictedUntil,
+      createdAt: users.createdAt,
+      updatedAt: users.updatedAt,
+    })
+    .from(users)
+    .where(eq(users.id, userId));
   if (userRes.length === 0) {
     return c.json({ code: "NOT_FOUND", message: "User not found" }, 404);
   }
 
-  const userSessions = await db.select().from(sessions).where(eq(sessions.userId, userId));
+  const userSessions = await db
+    .select({ id: sessions.id, expiresAt: sessions.expiresAt, createdAt: sessions.createdAt })
+    .from(sessions)
+    .where(eq(sessions.userId, userId));
 
   return c.json({
     user: userRes[0],
@@ -213,7 +234,7 @@ adminRouter.post("/users/:id/enforcement", async (c) => {
     );
   }
 
-  const { action, reason } = parseResult.data;
+  const { action, reason, durationDays } = parseResult.data;
   const db = await getDb();
 
   if (action === EnforcementAction.BAN) {
@@ -222,12 +243,26 @@ adminRouter.post("/users/:id/enforcement", async (c) => {
       .set({
         banned: true,
         banReason: reason,
+        enforcementAction: action,
+        restrictedUntil: null,
         updatedAt: new Date(),
       })
       .where(eq(users.id, userId));
 
     // Invalidate all active sessions for banned user
     await db.delete(sessions).where(eq(sessions.userId, userId));
+  } else if (action === EnforcementAction.RESTRICT || action === EnforcementAction.SUSPEND) {
+    const restrictedUntil = new Date(Date.now() + (durationDays || 1) * 24 * 60 * 60 * 1000);
+    await db
+      .update(users)
+      .set({ enforcementAction: action, restrictedUntil, updatedAt: new Date() })
+      .where(eq(users.id, userId));
+    await db.delete(sessions).where(eq(sessions.userId, userId));
+  } else {
+    await db
+      .update(users)
+      .set({ enforcementAction: action, updatedAt: new Date() })
+      .where(eq(users.id, userId));
   }
 
   await db.insert(auditLogs).values({
@@ -236,7 +271,7 @@ adminRouter.post("/users/:id/enforcement", async (c) => {
     action: AuditAction.APPLY_ENFORCEMENT,
     targetType: "user",
     targetId: userId,
-    meta: { action, reason },
+    meta: { action, reason, durationDays },
   });
 
   return c.json({ success: true, action });

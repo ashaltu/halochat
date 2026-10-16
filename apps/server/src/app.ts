@@ -10,15 +10,23 @@ import { chatsRouter } from "./chats/routes.js";
 import { safetyRouter } from "./safety/routes.js";
 import { supportRouter, adminRouter } from "./support/routes.js";
 import { AppEnv } from "./types.js";
+import * as Sentry from "@sentry/node";
+import { rateLimitMiddleware } from "./security/rate-limit.js";
+
+if (process.env.SENTRY_DSN) {
+  Sentry.init({ dsn: process.env.SENTRY_DSN });
+}
 
 export function createApp() {
   const app = new Hono<AppEnv>();
 
-  // CORS middleware supporting cookies and custom headers
+  const allowedOrigins = (process.env.ALLOWED_ORIGINS || "http://localhost:8081,http://localhost:3001")
+    .split(",")
+    .map((origin) => origin.trim());
   app.use(
     "*",
     cors({
-      origin: (origin) => origin || "*",
+      origin: (origin) => (!origin || allowedOrigins.includes(origin) ? origin || allowedOrigins[0] : ""),
       credentials: true,
       allowHeaders: ["Content-Type", "Authorization", "Cookie"],
       allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -26,6 +34,7 @@ export function createApp() {
   );
 
   app.use("*", logger());
+  app.use("*", rateLimitMiddleware);
 
   // Better Auth endpoints
   app.route("/api/auth", authRouter);
@@ -65,8 +74,9 @@ export function createApp() {
 
   // Error handling
   app.onError((err, c) => {
+    Sentry.captureException(err);
     console.error("Server Error:", err);
-    return c.json({ code: "INTERNAL_ERROR", message: err.message || "An unexpected error occurred" }, 500);
+    return c.json({ code: "INTERNAL_ERROR", message: "An unexpected error occurred" }, 500);
   });
 
   return app;

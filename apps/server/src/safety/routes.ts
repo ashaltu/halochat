@@ -145,6 +145,12 @@ safetyRouter.post("/chats/:id/report", async (c) => {
   }
 
   const chat = chatRes[0];
+  const isParticipant =
+    chat.requesterUserId === currentUser.id || chat.recipientUserId === currentUser.id;
+  if (!isParticipant) {
+    return c.json({ code: "FORBIDDEN", message: "Not permitted" }, 403);
+  }
+
   const reportedUserId =
     chat.requesterUserId === currentUser.id ? chat.recipientUserId : chat.requesterUserId;
 

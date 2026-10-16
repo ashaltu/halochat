@@ -39,6 +39,9 @@ requestsRouter.use("*", authMiddleware);
 
 requestsRouter.post("/", async (c) => {
   const currentUser = c.get("user");
+  if (!currentUser.emailVerified && process.env.REQUIRE_EMAIL_VERIFICATION !== "false") {
+    return c.json({ code: "EMAIL_NOT_VERIFIED", message: "Verify your email before sending requests" }, 403);
+  }
   const body = await c.req.json().catch(() => ({}));
   const parseResult = CreateContactRequestSchema.safeParse(body);
   if (!parseResult.success) {
@@ -189,6 +192,14 @@ requestsRouter.post("/", async (c) => {
   });
 
   const requestId = crypto.randomUUID();
+  const requesterSettings = await db
+    .select()
+    .from(protectionSettings)
+    .where(eq(protectionSettings.userId, currentUser.id));
+  const recipientSettings = await db
+    .select()
+    .from(protectionSettings)
+    .where(eq(protectionSettings.userId, recipientId));
 
   await db.insert(contactRequests).values({
     id: requestId,
@@ -196,6 +207,8 @@ requestsRouter.post("/", async (c) => {
     recipientUserId: recipientId,
     purpose,
     state: "PENDING_RECIPIENT",
+    requesterApprovalThreshold: requesterSettings[0]?.approvalThreshold || "ANY_ONE",
+    recipientApprovalThreshold: recipientSettings[0]?.approvalThreshold || "ANY_ONE",
   });
 
   // Record snapshots in contact_request_angel
@@ -329,6 +342,7 @@ requestsRouter.post("/:id/accept", async (c) => {
       recipientUserId: request.recipientUserId,
       mode: "COMFORT",
       status: "ACTIVE",
+      purpose: request.purpose,
     });
 
     await db

@@ -231,7 +231,11 @@ export default function AngelTabScreen() {
           {pendingAccessRequests.map((ar) => (
             <View key={ar.id} style={styles.card}>
               <Text style={styles.cardBold}>
-                Request to {ar.type === "LEAVE" ? "Leave Chat (I'm Comfortable)" : "Rejoin Chat"}
+                {ar.type === "LEAVE"
+                  ? "Request to Leave Chat (I'm Comfortable)"
+                  : ar.type === "INVITE"
+                    ? "Invitation to Protect Chat"
+                    : "Request to Rejoin Chat"}
               </Text>
               {ar.reason ? (
                 <Text style={styles.privateReasonText}>Private Reason: "{ar.reason}"</Text>

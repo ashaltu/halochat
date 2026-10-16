@@ -46,6 +46,8 @@ export default function RootLayout() {
           <Stack.Screen name="onboarding" options={{ headerShown: false }} />
           <Stack.Screen name="auth/sign-in" options={{ title: "Sign In", headerShown: false }} />
           <Stack.Screen name="auth/sign-up" options={{ title: "Sign Up", headerShown: false }} />
+          <Stack.Screen name="auth/forgot-password" options={{ title: "Recover Account" }} />
+          <Stack.Screen name="auth/reset-password" options={{ title: "Reset Password" }} />
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
           <Stack.Screen name="chat/[id]" options={{ title: "Chat" }} />
           <Stack.Screen name="settings/angels" options={{ title: "My Angels" }} />

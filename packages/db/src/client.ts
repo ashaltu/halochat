@@ -43,6 +43,9 @@ export async function initDbSchema(db: DB) {
       "role" text NOT NULL DEFAULT 'user',
       "banned" boolean NOT NULL DEFAULT false,
       "ban_reason" text,
+      "email_verified" boolean NOT NULL DEFAULT false,
+      "enforcement_action" text,
+      "restricted_until" timestamp,
       "created_at" timestamp NOT NULL DEFAULT now(),
       "updated_at" timestamp NOT NULL DEFAULT now()
     );`,
@@ -100,6 +103,8 @@ export async function initDbSchema(db: DB) {
       "state" text NOT NULL DEFAULT 'PENDING_RECIPIENT',
       "recipient_decided_at" timestamp,
       "chat_id" text,
+      "requester_approval_threshold" text NOT NULL DEFAULT 'ANY_ONE',
+      "recipient_approval_threshold" text NOT NULL DEFAULT 'ANY_ONE',
       "created_at" timestamp NOT NULL DEFAULT now(),
       "updated_at" timestamp NOT NULL DEFAULT now()
     );`,
@@ -121,6 +126,7 @@ export async function initDbSchema(db: DB) {
       "status" text NOT NULL DEFAULT 'ACTIVE',
       "ended_by" text,
       "last_message_at" timestamp,
+      "purpose" text NOT NULL DEFAULT 'Other',
       "created_at" timestamp NOT NULL DEFAULT now(),
       "updated_at" timestamp NOT NULL DEFAULT now()
     );`,
@@ -222,6 +228,13 @@ export async function initDbSchema(db: DB) {
       "meta" jsonb,
       "created_at" timestamp NOT NULL DEFAULT now()
     );`,
+    `ALTER TABLE "user" ADD COLUMN IF NOT EXISTS "email_verified" boolean NOT NULL DEFAULT false;`,
+    `ALTER TABLE "user" ADD COLUMN IF NOT EXISTS "enforcement_action" text;`,
+    `ALTER TABLE "user" ADD COLUMN IF NOT EXISTS "restricted_until" timestamp;`,
+    `ALTER TABLE "contact_request" ADD COLUMN IF NOT EXISTS "requester_approval_threshold" text NOT NULL DEFAULT 'ANY_ONE';`,
+    `ALTER TABLE "contact_request" ADD COLUMN IF NOT EXISTS "recipient_approval_threshold" text NOT NULL DEFAULT 'ANY_ONE';`,
+    `ALTER TABLE "chat" ADD COLUMN IF NOT EXISTS "purpose" text NOT NULL DEFAULT 'Other';`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "message_chat_seq_unique" ON "message" ("chat_id", "seq");`,
     `CREATE TABLE IF NOT EXISTS "push_token" (
       "id" text PRIMARY KEY,
       "user_id" text NOT NULL REFERENCES "user"("id") ON DELETE CASCADE,

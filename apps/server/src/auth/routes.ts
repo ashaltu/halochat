@@ -1,11 +1,27 @@
 import crypto from "node:crypto";
 import { Hono } from "hono";
-import { getDb, users, accounts, sessions, protectionSettings, auditLogs, eq, or } from "@halochat/db";
-import { SignUpSchema, SignInSchema, AuditAction } from "@halochat/shared";
+import { getDb, users, accounts, sessions, verifications, protectionSettings, auditLogs, eq, or, and } from "@halochat/db";
+import { SignUpSchema, SignInSchema, EmailSchema, TokenSchema, ResetPasswordSchema, AuditAction } from "@halochat/shared";
 import { hashPassword, verifyPassword, createSession, validateSessionToken } from "./index.js";
+import { sendEmail } from "../notifications/email.js";
 import { AppEnv } from "../types.js";
 
 export const authRouter = new Hono<AppEnv>();
+
+const tokenHash = (token: string) => crypto.createHash("sha256").update(token).digest("hex");
+
+async function createVerification(identifier: string, ttlMs: number) {
+  const db = await getDb();
+  const token = crypto.randomBytes(32).toString("hex");
+  await db.delete(verifications).where(eq(verifications.identifier, identifier));
+  await db.insert(verifications).values({
+    id: crypto.randomUUID(),
+    identifier,
+    value: tokenHash(token),
+    expiresAt: new Date(Date.now() + ttlMs),
+  });
+  return token;
+}
 
 authRouter.post("/sign-up/email", async (c) => {
   const body = await c.req.json().catch(() => ({}));
@@ -40,9 +56,18 @@ authRouter.post("/sign-up/email", async (c) => {
   const userId = crypto.randomUUID();
   const hashedPassword = hashPassword(password);
 
-  // Check if first registered user can be made admin or regular user
+  const adminEmails = (process.env.ADMIN_EMAILS || "")
+    .split(",")
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
   const userCount = await db.select().from(users);
-  const role = userCount.length === 0 ? "admin" : "user";
+  const role =
+    adminEmails.includes(email.toLowerCase()) ||
+    (process.env.NODE_ENV === "test" && userCount.length === 0)
+      ? "admin"
+      : "user";
+  const emailVerified =
+    process.env.NODE_ENV === "test" || process.env.REQUIRE_EMAIL_VERIFICATION === "false";
 
   await db.insert(users).values({
     id: userId,
@@ -52,6 +77,7 @@ authRouter.post("/sign-up/email", async (c) => {
     dateOfBirth,
     sex,
     role,
+    emailVerified,
   });
 
   await db.insert(accounts).values({
@@ -80,9 +106,19 @@ authRouter.post("/sign-up/email", async (c) => {
 
   const session = await createSession(userId, c.req.raw.headers);
 
+  if (!emailVerified) {
+    const verificationToken = await createVerification(`email:${userId}`, 24 * 60 * 60 * 1000);
+    const publicUrl = process.env.PUBLIC_APP_URL || "http://localhost:3000";
+    await sendEmail({
+      to: email,
+      subject: "Verify your HaloChat email",
+      html: `<p>Verify your email:</p><p><a href="${publicUrl}/api/auth/verify-email?token=${verificationToken}">Verify email</a></p>`,
+    });
+  }
+
   c.header(
     "Set-Cookie",
-    `better-auth.session_token=${session.token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${
+    `better-auth.session_token=${session.token}; Path=/; HttpOnly; SameSite=Lax${process.env.NODE_ENV === "production" ? "; Secure" : ""}; Max-Age=${
       30 * 24 * 60 * 60
     }`
   );
@@ -98,6 +134,7 @@ authRouter.post("/sign-up/email", async (c) => {
         dateOfBirth,
         sex,
         role,
+        emailVerified,
         onboardingCompletedAt: null,
       },
     },
@@ -162,7 +199,7 @@ authRouter.post("/sign-in/email", async (c) => {
 
   c.header(
     "Set-Cookie",
-    `better-auth.session_token=${session.token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${
+    `better-auth.session_token=${session.token}; Path=/; HttpOnly; SameSite=Lax${process.env.NODE_ENV === "production" ? "; Secure" : ""}; Max-Age=${
       30 * 24 * 60 * 60
     }`
   );
@@ -177,6 +214,7 @@ authRouter.post("/sign-in/email", async (c) => {
       dateOfBirth: user.dateOfBirth,
       sex: user.sex,
       role: user.role,
+      emailVerified: user.emailVerified,
       onboardingCompletedAt: user.onboardingCompletedAt,
     },
   });
@@ -232,7 +270,79 @@ authRouter.get("/get-session", async (c) => {
       dateOfBirth: sessionData.user.dateOfBirth,
       sex: sessionData.user.sex,
       role: sessionData.user.role,
+      emailVerified: sessionData.user.emailVerified,
       onboardingCompletedAt: sessionData.user.onboardingCompletedAt,
     },
   });
+});
+
+authRouter.post("/send-verification-email", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const parsed = EmailSchema.safeParse(body);
+  if (!parsed.success) return c.json({ code: "VALIDATION_ERROR" }, 400);
+  const db = await getDb();
+  const result = await db.select().from(users).where(eq(users.email, parsed.data.email.toLowerCase()));
+  if (result[0] && !result[0].emailVerified) {
+    const token = await createVerification(`email:${result[0].id}`, 24 * 60 * 60 * 1000);
+    const publicUrl = process.env.PUBLIC_APP_URL || "http://localhost:3000";
+    await sendEmail({
+      to: result[0].email,
+      subject: "Verify your HaloChat email",
+      html: `<p><a href="${publicUrl}/api/auth/verify-email?token=${token}">Verify email</a></p>`,
+    });
+  }
+  return c.json({ success: true });
+});
+
+authRouter.get("/verify-email", async (c) => {
+  const parsed = TokenSchema.safeParse({ token: c.req.query("token") });
+  if (!parsed.success) return c.json({ code: "INVALID_TOKEN" }, 400);
+  const db = await getDb();
+  const rows = await db.select().from(verifications).where(eq(verifications.value, tokenHash(parsed.data.token)));
+  const verification = rows.find((row) => row.identifier.startsWith("email:"));
+  if (!verification || verification.expiresAt < new Date()) {
+    return c.json({ code: "INVALID_TOKEN", message: "Verification link is invalid or expired" }, 400);
+  }
+  const userId = verification.identifier.slice(6);
+  await db.update(users).set({ emailVerified: true, updatedAt: new Date() }).where(eq(users.id, userId));
+  await db.delete(verifications).where(eq(verifications.id, verification.id));
+  return c.json({ success: true });
+});
+
+authRouter.post("/forget-password", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const parsed = EmailSchema.safeParse(body);
+  if (!parsed.success) return c.json({ code: "VALIDATION_ERROR" }, 400);
+  const db = await getDb();
+  const result = await db.select().from(users).where(eq(users.email, parsed.data.email.toLowerCase()));
+  if (result[0]) {
+    const token = await createVerification(`reset:${result[0].id}`, 60 * 60 * 1000);
+    const publicUrl = process.env.PUBLIC_APP_URL || "http://localhost:8081";
+    await sendEmail({
+      to: result[0].email,
+      subject: "Reset your HaloChat password",
+      html: `<p><a href="${publicUrl}/auth/reset-password?token=${token}">Reset password</a></p>`,
+    });
+  }
+  return c.json({ success: true });
+});
+
+authRouter.post("/reset-password", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const parsed = ResetPasswordSchema.safeParse(body);
+  if (!parsed.success) return c.json({ code: "VALIDATION_ERROR" }, 400);
+  const db = await getDb();
+  const rows = await db.select().from(verifications).where(eq(verifications.value, tokenHash(parsed.data.token)));
+  const verification = rows.find((row) => row.identifier.startsWith("reset:"));
+  if (!verification || verification.expiresAt < new Date()) {
+    return c.json({ code: "INVALID_TOKEN", message: "Reset link is invalid or expired" }, 400);
+  }
+  const userId = verification.identifier.slice(6);
+  await db
+    .update(accounts)
+    .set({ password: hashPassword(parsed.data.password), updatedAt: new Date() })
+    .where(and(eq(accounts.userId, userId), eq(accounts.providerId, "credential")));
+  await db.delete(sessions).where(eq(sessions.userId, userId));
+  await db.delete(verifications).where(eq(verifications.id, verification.id));
+  return c.json({ success: true });
 });

@@ -279,27 +279,33 @@ chatsRouter.post("/:id/messages", async (c) => {
     );
   }
 
-  // Compute next monotonic seq
-  const lastMsg = await db
-    .select({ seq: messages.seq })
-    .from(messages)
-    .where(eq(messages.chatId, chatId))
-    .orderBy(desc(messages.seq))
-    .limit(1);
-
-  const nextSeq = lastMsg.length > 0 ? lastMsg[0].seq + 1 : 1;
   const messageId = crypto.randomUUID();
   const now = new Date();
-
-  await db.insert(messages).values({
-    id: messageId,
-    chatId,
-    senderId: currentUser.id,
-    ciphertext: parseResult.data.ciphertext,
-    encryptionMetadata: parseResult.data.encryptionMetadata || null,
-    seq: nextSeq,
-    createdAt: now,
-  });
+  let nextSeq = 1;
+  let inserted = false;
+  for (let attempt = 0; attempt < 3 && !inserted; attempt++) {
+    const lastMsg = await db
+      .select({ seq: messages.seq })
+      .from(messages)
+      .where(eq(messages.chatId, chatId))
+      .orderBy(desc(messages.seq))
+      .limit(1);
+    nextSeq = lastMsg.length > 0 ? lastMsg[0].seq + 1 : 1;
+    try {
+      await db.insert(messages).values({
+        id: messageId,
+        chatId,
+        senderId: currentUser.id,
+        ciphertext: parseResult.data.ciphertext,
+        encryptionMetadata: parseResult.data.encryptionMetadata || null,
+        seq: nextSeq,
+        createdAt: now,
+      });
+      inserted = true;
+    } catch (error) {
+      if (attempt === 2) throw error;
+    }
+  }
 
   await db.update(chats).set({ lastMessageAt: now, updatedAt: now }).where(eq(chats.id, chatId));
 
@@ -511,29 +517,22 @@ chatsRouter.post("/:id/angel-invitations", async (c) => {
 
   const assignment = assignmentRes[0];
 
-  // Grant access
-  await db.insert(chatAngelAccess).values({
-    id: crypto.randomUUID(),
+  const invitationId = crypto.randomUUID();
+  await db.insert(angelAccessRequests).values({
+    id: invitationId,
     chatId,
     angelUserId: assignment.angelUserId,
-    angelAssignmentId: assignment.id,
-    authorizedFrom: new Date(),
+    type: "INVITE",
+    state: "PENDING",
+    requestedBy: currentUser.id,
   });
 
-  // Update mode to PROTECTED
-  await db.update(chats).set({ mode: "PROTECTED" }).where(eq(chats.id, chatId));
-
-  // Notify users of mode change
-  wsManager.sendToUser(chat.requesterUserId, {
-    type: WsEventType.CHAT_UPDATED,
+  wsManager.sendToUser(assignment.angelUserId, {
+    type: WsEventType.ACCESS_REQUEST_UPDATED,
+    requestId: invitationId,
     chatId,
-    mode: "PROTECTED",
-  });
-  wsManager.sendToUser(chat.recipientUserId, {
-    type: WsEventType.CHAT_UPDATED,
-    chatId,
-    mode: "PROTECTED",
+    typeAction: "INVITE",
   });
 
-  return c.json({ success: true, mode: "PROTECTED" });
+  return c.json({ success: true, invitationId, state: "PENDING" }, 201);
 });

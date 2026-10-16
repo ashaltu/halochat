@@ -5,6 +5,7 @@ import {
   pgTable,
   text,
   timestamp,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 
 // 1. User table (Better Auth compatible + HaloChat extensions)
@@ -19,6 +20,9 @@ export const users = pgTable("user", {
   role: text("role").notNull().default("user"), // 'user' | 'admin'
   banned: boolean("banned").notNull().default(false),
   banReason: text("ban_reason"),
+  emailVerified: boolean("email_verified").notNull().default(false),
+  enforcementAction: text("enforcement_action"),
+  restrictedUntil: timestamp("restricted_until"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
@@ -106,6 +110,8 @@ export const contactRequests = pgTable("contact_request", {
   state: text("state").notNull().default("PENDING_RECIPIENT"),
   recipientDecidedAt: timestamp("recipient_decided_at"),
   chatId: text("chat_id"),
+  requesterApprovalThreshold: text("requester_approval_threshold").notNull().default("ANY_ONE"),
+  recipientApprovalThreshold: text("recipient_approval_threshold").notNull().default("ANY_ONE"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
@@ -139,6 +145,7 @@ export const chats = pgTable("chat", {
   status: text("status").notNull().default("ACTIVE"), // 'ACTIVE' | 'ENDED'
   endedBy: text("ended_by"),
   lastMessageAt: timestamp("last_message_at"),
+  purpose: text("purpose").notNull().default("Other"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
@@ -156,7 +163,7 @@ export const messages = pgTable("message", {
   encryptionMetadata: jsonb("encryption_metadata"),
   seq: integer("seq").notNull(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
-});
+}, (table) => [uniqueIndex("message_chat_seq_unique").on(table.chatId, table.seq)]);
 
 // 12. Whisper
 export const whispers = pgTable("whisper", {

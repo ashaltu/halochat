@@ -99,6 +99,9 @@ export default function SignInScreen() {
           <Text style={styles.linkText}>Create Account</Text>
         </TouchableOpacity>
       </View>
+      <TouchableOpacity onPress={() => router.push("/auth/forgot-password")}>
+        <Text style={[styles.linkText, { textAlign: "center", marginTop: 16 }]}>Forgot password?</Text>
+      </TouchableOpacity>
     </View>
   );
 }
