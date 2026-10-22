@@ -553,8 +553,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff2abc00be7fca6ebc474524697ae276ad847ad0a6b3faa4bcb027e9a4614ad0"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "wasi",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -564,9 +566,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi",
  "rand_core 0.10.1",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -600,6 +604,8 @@ dependencies = [
 name = "halochat-e2ee-core"
 version = "0.1.0"
 dependencies = [
+ "getrandom 0.2.17",
+ "js-sys",
  "openmls",
  "openmls_basic_credential",
  "openmls_rust_crypto",
@@ -607,6 +613,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tls_codec",
+ "wasm-bindgen",
  "zeroize",
 ]
 
@@ -1177,6 +1184,7 @@ version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "88ea97f8931047590bda498a9502e8fe6c9bb2bb04547a9a463618783481e0ec"
 dependencies = [
+ "getrandom 0.4.3",
  "log",
  "openmls_serialization_helpers",
  "openmls_traits",
@@ -1185,6 +1193,7 @@ dependencies = [
  "serde_bytes",
  "thiserror",
  "tls_codec",
+ "web-time",
  "zeroize",
 ]
 
@@ -1901,6 +1910,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23f0c9c52aa7cd7d77769a4cfe2a9adb1b331f489a41d912ce14513d5ab995c6"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "web-time"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
+dependencies = [
+ "js-sys",
+ "serde",
+ "wasm-bindgen",
 ]
 
 [[package]]

@@ -18,6 +18,9 @@ use std::collections::HashMap;
 use tls_codec::{Deserialize as TlsDeserialize, Serialize as TlsSerialize};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
+#[cfg(target_arch = "wasm32")]
+mod wasm;
+
 const SUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
 const STATE_VERSION: u32 = 1;
 

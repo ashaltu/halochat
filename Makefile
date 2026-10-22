@@ -1,4 +1,4 @@
-.PHONY: all install build test e2ee-test test-e2e dev-server dev-support dev-mobile clean check rust-check
+.PHONY: all install build test e2ee-test test-e2e e2ee-wasm-check dev-server dev-support dev-mobile clean check rust-check
 
 all: install build test
 
@@ -13,6 +13,10 @@ test: e2ee-test
 
 e2ee-test:
 	cargo test --locked --manifest-path packages/e2ee-core/Cargo.toml
+
+e2ee-wasm-check:
+	cargo check --locked --manifest-path packages/e2ee-core/Cargo.toml --target wasm32-unknown-unknown
+	cargo clippy --locked --manifest-path packages/e2ee-core/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
 
 test-e2e:
 	pnpm test:e2e
