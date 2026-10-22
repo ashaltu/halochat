@@ -1,19 +1,336 @@
-//! Protocol-level MLS test harness for HaloChat.
+//! MLS protocol core for HaloChat.
 //!
-//! This crate deliberately does not claim to be the production E2EE boundary.
-//! It validates the selected upstream protocol against HaloChat's basic group
-//! messaging needs. Production use still requires authenticated HaloChat device
-//! credentials, encrypted durable state, platform bindings, and ordered delivery.
+//! Snapshots contain private keys and group secrets. Callers must encrypt them
+//! at rest and atomically persist each new snapshot with its outgoing wire data.
+//! The basic credential is not HaloChat identity authentication.
+
+use openmls::prelude::{
+    BasicCredential, Ciphersuite, CredentialWithKey, KeyPackage, KeyPackageIn, MlsGroup,
+    MlsGroupCreateConfig, MlsGroupJoinConfig, MlsMessageBodyIn, MlsMessageIn, MlsMessageOut,
+    OpenMlsProvider, ProcessedMessageContent, ProtocolMessage, StagedWelcome,
+};
+use openmls_basic_credential::SignatureKeyPair;
+#[cfg(test)]
+use openmls_rust_crypto::OpenMlsRustCrypto;
+use openmls_rust_crypto::{MemoryStorage, RustCrypto};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use tls_codec::{Deserialize as TlsDeserialize, Serialize as TlsSerialize};
+use zeroize::{Zeroize, ZeroizeOnDrop};
+
+const SUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
+const STATE_VERSION: u32 = 1;
+
+pub struct AddMemberResult {
+    pub state: Vec<u8>,
+    pub commit: Vec<u8>,
+    pub welcome: Vec<u8>,
+}
+
+#[derive(Deserialize, Serialize, Zeroize, ZeroizeOnDrop)]
+struct StateSnapshot {
+    version: u32,
+    group_id: Option<Vec<u8>>,
+    identity: Vec<u8>,
+    signature_public_key: Vec<u8>,
+    storage: Vec<StorageEntry>,
+}
+
+#[derive(Deserialize, Serialize, Zeroize, ZeroizeOnDrop)]
+struct StorageEntry {
+    key: Vec<u8>,
+    value: Vec<u8>,
+}
+
+#[derive(Default)]
+struct HaloProvider {
+    crypto: RustCrypto,
+    storage: MemoryStorage,
+}
+
+impl OpenMlsProvider for HaloProvider {
+    type CryptoProvider = RustCrypto;
+    type RandProvider = RustCrypto;
+    type StorageProvider = MemoryStorage;
+
+    fn storage(&self) -> &Self::StorageProvider {
+        &self.storage
+    }
+
+    fn crypto(&self) -> &Self::CryptoProvider {
+        &self.crypto
+    }
+
+    fn rand(&self) -> &Self::RandProvider {
+        &self.crypto
+    }
+}
+
+impl Drop for HaloProvider {
+    fn drop(&mut self) {
+        if let Ok(values) = self.storage.values.get_mut() {
+            for (mut key, mut value) in values.drain() {
+                key.zeroize();
+                value.zeroize();
+            }
+        }
+    }
+}
+
+fn encode_state(
+    provider: &HaloProvider,
+    identity: Vec<u8>,
+    signature_public_key: Vec<u8>,
+    group_id: Option<Vec<u8>>,
+) -> Result<Vec<u8>, String> {
+    let values = provider
+        .storage()
+        .values
+        .read()
+        .map_err(|_| "MLS storage lock is poisoned".to_owned())?;
+    let snapshot = StateSnapshot {
+        version: STATE_VERSION,
+        group_id,
+        identity,
+        signature_public_key,
+        storage: values
+            .iter()
+            .map(|(key, value)| StorageEntry {
+                key: key.clone(),
+                value: value.clone(),
+            })
+            .collect(),
+    };
+    serde_json::to_vec(&snapshot).map_err(|error| error.to_string())
+}
+
+fn decode_state(encoded: &[u8]) -> Result<(StateSnapshot, HaloProvider), String> {
+    let snapshot: StateSnapshot =
+        serde_json::from_slice(encoded).map_err(|error| error.to_string())?;
+    if snapshot.version != STATE_VERSION {
+        return Err("Unsupported MLS state version".to_owned());
+    }
+
+    let provider = HaloProvider::default();
+    let values = snapshot
+        .storage
+        .iter()
+        .map(|entry| (entry.key.clone(), entry.value.clone()))
+        .collect::<HashMap<_, _>>();
+    *provider
+        .storage()
+        .values
+        .write()
+        .map_err(|_| "MLS storage lock is poisoned".to_owned())? = values;
+    Ok((snapshot, provider))
+}
+
+fn load_group(
+    snapshot: &StateSnapshot,
+    provider: &HaloProvider,
+) -> Result<(MlsGroup, SignatureKeyPair), String> {
+    let group_id = snapshot
+        .group_id
+        .as_deref()
+        .ok_or_else(|| "MLS state has no group".to_owned())?;
+    let group = MlsGroup::load(
+        provider.storage(),
+        &openmls::prelude::GroupId::from_slice(group_id),
+    )
+    .map_err(|error| error.to_string())?
+    .ok_or_else(|| "MLS group state is missing".to_owned())?;
+    let signer = SignatureKeyPair::read(
+        provider.storage(),
+        &snapshot.signature_public_key,
+        SUITE.signature_algorithm(),
+    )
+    .ok_or_else(|| "MLS signing key is missing".to_owned())?;
+    Ok((group, signer))
+}
+
+fn encode_message(message: &MlsMessageOut) -> Result<Vec<u8>, String> {
+    message
+        .tls_serialize_detached()
+        .map_err(|error| error.to_string())
+}
+
+fn decode_protocol_message(encoded: &[u8]) -> Result<ProtocolMessage, String> {
+    MlsMessageIn::tls_deserialize_exact(encoded)
+        .map_err(|error| error.to_string())?
+        .try_into_protocol_message()
+        .map_err(|error| error.to_string())
+}
+
+pub fn create_device(identity: &[u8]) -> Result<(Vec<u8>, Vec<u8>), String> {
+    if identity.is_empty() {
+        return Err("MLS device identity cannot be empty".to_owned());
+    }
+    let provider = HaloProvider::default();
+    let credential = BasicCredential::new(identity.to_vec());
+    let signer =
+        SignatureKeyPair::new(SUITE.signature_algorithm()).map_err(|error| error.to_string())?;
+    signer
+        .store(provider.storage())
+        .map_err(|error| error.to_string())?;
+    let credential_with_key = CredentialWithKey {
+        credential: credential.into(),
+        signature_key: signer.public().into(),
+    };
+    let key_package = KeyPackage::builder()
+        .build(SUITE, &provider, &signer, credential_with_key)
+        .map_err(|error| error.to_string())?;
+    let encoded_key_package = key_package
+        .key_package()
+        .tls_serialize_detached()
+        .map_err(|error| error.to_string())?;
+    let state = encode_state(&provider, identity.to_vec(), signer.to_public_vec(), None)?;
+    Ok((state, encoded_key_package))
+}
+
+pub fn create_group(state: &[u8], group_id: &[u8]) -> Result<Vec<u8>, String> {
+    if group_id.is_empty() {
+        return Err("MLS group id cannot be empty".to_owned());
+    }
+    let (mut snapshot, provider) = decode_state(state)?;
+    if snapshot.group_id.is_some() {
+        return Err("MLS device already belongs to a group".to_owned());
+    }
+    let signer = SignatureKeyPair::read(
+        provider.storage(),
+        &snapshot.signature_public_key,
+        SUITE.signature_algorithm(),
+    )
+    .ok_or_else(|| "MLS signing key is missing".to_owned())?;
+    let credential = BasicCredential::new(snapshot.identity.clone());
+    let credential_with_key = CredentialWithKey {
+        credential: credential.into(),
+        signature_key: signer.public().into(),
+    };
+    let config = MlsGroupCreateConfig::builder()
+        .ciphersuite(SUITE)
+        .use_ratchet_tree_extension(true)
+        .build();
+    let group = MlsGroup::new_with_group_id(
+        &provider,
+        &signer,
+        &config,
+        openmls::prelude::GroupId::from_slice(group_id),
+        credential_with_key,
+    )
+    .map_err(|error| error.to_string())?;
+    snapshot.group_id = Some(group.group_id().as_slice().to_vec());
+    encode_state(
+        &provider,
+        snapshot.identity.clone(),
+        snapshot.signature_public_key.clone(),
+        snapshot.group_id.clone(),
+    )
+}
+
+pub fn add_member(state: &[u8], encoded_key_package: &[u8]) -> Result<AddMemberResult, String> {
+    let (snapshot, provider) = decode_state(state)?;
+    let (mut group, signer) = load_group(&snapshot, &provider)?;
+    let key_package = KeyPackageIn::tls_deserialize_exact(encoded_key_package)
+        .map_err(|error| error.to_string())?
+        .validate(provider.crypto(), openmls::prelude::ProtocolVersion::Mls10)
+        .map_err(|error| error.to_string())?;
+    let (commit, welcome, _) = group
+        .add_members(&provider, &signer, &[key_package])
+        .map_err(|error| error.to_string())?;
+    group
+        .merge_pending_commit(&provider)
+        .map_err(|error| error.to_string())?;
+    let commit = encode_message(&commit)?;
+    let welcome = encode_message(&welcome)?;
+    let updated_state = encode_state(
+        &provider,
+        snapshot.identity.clone(),
+        snapshot.signature_public_key.clone(),
+        snapshot.group_id.clone(),
+    )?;
+    Ok(AddMemberResult {
+        state: updated_state,
+        commit,
+        welcome,
+    })
+}
+
+pub fn join_group(state: &[u8], encoded_welcome: &[u8]) -> Result<Vec<u8>, String> {
+    let (snapshot, provider) = decode_state(state)?;
+    if snapshot.group_id.is_some() {
+        return Err("MLS device already belongs to a group".to_owned());
+    }
+    let welcome = match MlsMessageIn::tls_deserialize_exact(encoded_welcome)
+        .map_err(|error| error.to_string())?
+        .extract()
+    {
+        MlsMessageBodyIn::Welcome(welcome) => welcome,
+        _ => return Err("Expected MLS Welcome message".to_owned()),
+    };
+    let group =
+        StagedWelcome::new_from_welcome(&provider, &MlsGroupJoinConfig::default(), welcome, None)
+            .map_err(|error| error.to_string())?
+            .into_group(&provider)
+            .map_err(|error| error.to_string())?;
+    encode_state(
+        &provider,
+        snapshot.identity.clone(),
+        snapshot.signature_public_key.clone(),
+        Some(group.group_id().as_slice().to_vec()),
+    )
+}
+
+pub fn encrypt_application(state: &[u8], plaintext: &[u8]) -> Result<(Vec<u8>, Vec<u8>), String> {
+    let (snapshot, provider) = decode_state(state)?;
+    let (mut group, signer) = load_group(&snapshot, &provider)?;
+    let ciphertext = group
+        .create_message(&provider, &signer, plaintext)
+        .map_err(|error| error.to_string())?;
+    Ok((
+        encode_state(
+            &provider,
+            snapshot.identity.clone(),
+            snapshot.signature_public_key.clone(),
+            snapshot.group_id.clone(),
+        )?,
+        encode_message(&ciphertext)?,
+    ))
+}
+
+pub fn decrypt_application(
+    state: &[u8],
+    encoded_message: &[u8],
+) -> Result<(Vec<u8>, Vec<u8>), String> {
+    let (snapshot, provider) = decode_state(state)?;
+    let (mut group, _) = load_group(&snapshot, &provider)?;
+    let processed = group
+        .process_message(&provider, decode_protocol_message(encoded_message)?)
+        .map_err(|error| error.to_string())?;
+    let plaintext = match processed.into_content() {
+        ProcessedMessageContent::ApplicationMessage(message) => message.into_bytes(),
+        _ => return Err("Expected MLS application message".to_owned()),
+    };
+    Ok((
+        encode_state(
+            &provider,
+            snapshot.identity.clone(),
+            snapshot.signature_public_key.clone(),
+            snapshot.group_id.clone(),
+        )?,
+        plaintext,
+    ))
+}
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     use openmls::prelude::{
         BasicCredential, Ciphersuite, KeyPackage, LeafNodeIndex, MlsGroup, MlsGroupCreateConfig,
         MlsGroupJoinConfig, MlsMessageIn, MlsMessageOut, OpenMlsProvider, ProcessedMessageContent,
         ProtocolMessage, StagedWelcome,
     };
     use openmls_basic_credential::SignatureKeyPair;
-    use openmls_rust_crypto::OpenMlsRustCrypto;
     use tls_codec::{Deserialize, Serialize};
 
     const SUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
@@ -122,5 +439,39 @@ mod tests {
         assert!(bob_group
             .process_message(&bob_provider, protocol_message(after_removal))
             .is_err());
+    }
+
+    #[test]
+    fn opaque_snapshots_support_add_join_encrypt_and_decrypt() {
+        let (alice_identity, _) = create_device(b"alice/device-1").unwrap();
+        let (bob_identity, bob_key_package) = create_device(b"bob/device-1").unwrap();
+        let alice_group = create_group(&alice_identity, b"chat-group-1").unwrap();
+        let added = add_member(&alice_group, &bob_key_package).unwrap();
+        let (alice_group, welcome) = (added.state, added.welcome);
+        let bob_group = join_group(&bob_identity, &welcome).unwrap();
+
+        let (alice_group, ciphertext) =
+            encrypt_application(&alice_group, b"opaque state hello").unwrap();
+        let (bob_group, plaintext) = decrypt_application(&bob_group, &ciphertext).unwrap();
+        assert_eq!(plaintext, b"opaque state hello");
+
+        let (_, reply) = encrypt_application(&bob_group, b"reply after state restore").unwrap();
+        let (_, plaintext) = decrypt_application(&alice_group, &reply).unwrap();
+        assert_eq!(plaintext, b"reply after state restore");
+    }
+
+    #[test]
+    fn rejects_invalid_state_and_incomplete_operations() {
+        assert!(create_device(b"").is_err());
+        assert!(create_group(b"not-json", b"group").is_err());
+
+        let (identity, _) = create_device(b"alice/device-1").unwrap();
+        assert!(create_group(&identity, b"").is_err());
+        assert!(add_member(&identity, b"invalid-key-package").is_err());
+        assert!(encrypt_application(&identity, b"no group").is_err());
+
+        let mut snapshot: serde_json::Value = serde_json::from_slice(&identity).unwrap();
+        snapshot["version"] = serde_json::Value::from(STATE_VERSION + 1);
+        assert!(create_group(&serde_json::to_vec(&snapshot).unwrap(), b"group").is_err());
     }
 }

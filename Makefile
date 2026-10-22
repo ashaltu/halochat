@@ -31,6 +31,7 @@ check: rust-check
 
 rust-check:
 	cargo fmt --manifest-path packages/e2ee-core/Cargo.toml -- --check
+	cargo clippy --locked --manifest-path packages/e2ee-core/Cargo.toml -- -D warnings
 
 clean:
 	rm -rf node_modules apps/*/node_modules packages/*/node_modules apps/*/dist packages/*/dist
