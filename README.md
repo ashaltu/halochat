@@ -31,6 +31,7 @@ HaloChat is a one-to-one text messaging application designed to make conversatio
 - Node.js 22+
 - pnpm 10+
 - GNU Make
+- Rust 1.91+ and Cargo (used by the OpenMLS protocol tests in `make test`)
 
 ### Quick Start
 

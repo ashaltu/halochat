@@ -29,6 +29,16 @@ export async function getDb(): Promise<DB> {
   return globalDb;
 }
 
+export async function closeDb(): Promise<void> {
+  if (pgliteInstance) {
+    await pgliteInstance.close();
+    pgliteInstance = null;
+  } else if (globalDb && "$client" in globalDb) {
+    await (globalDb as any).$client.end?.();
+  }
+  globalDb = null;
+}
+
 export async function initDbSchema(db: DB) {
   // Executes DDL to create tables if they do not exist
   const ddlStatements = [

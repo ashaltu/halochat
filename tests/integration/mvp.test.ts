@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { createApp } from "../../apps/server/src/app.js";
-import { getDb, initDbSchema, users } from "@halochat/db";
+import { closeDb, getDb, initDbSchema, users } from "@halochat/db";
 import {
   ApprovalThreshold,
   ChatMode,
@@ -20,6 +20,10 @@ describe("HaloChat MVP Integration Tests", () => {
     const db = await getDb();
     await initDbSchema(db);
     app = createApp();
+  });
+
+  afterAll(async () => {
+    await closeDb();
   });
 
   // Helper for app requests

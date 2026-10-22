@@ -1,0 +1,15 @@
+[package]
+name = "halochat-e2ee-core"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+openmls = "=0.9.1"
+openmls_basic_credential = "=0.6.0"
+openmls_rust_crypto = "=0.6.0"
+tls_codec = "=0.5.0"
+
+[dev-dependencies]
+openmls_memory_storage = "=0.6.0"
+openmls_traits = "=0.6.0"
