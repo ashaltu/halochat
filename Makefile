@@ -1,4 +1,6 @@
-.PHONY: all install build test e2ee-test test-e2e e2ee-wasm-check dev-server dev-support dev-mobile clean check rust-check
+.PHONY: all install build test e2ee-test e2ee-wasm-check e2ee-wasm-test test-e2e dev-server dev-support dev-mobile clean check rust-check
+
+WASM_BINDGEN ?= wasm-bindgen
 
 all: install build test
 
@@ -17,6 +19,11 @@ e2ee-test:
 e2ee-wasm-check:
 	cargo check --locked --manifest-path packages/e2ee-core/Cargo.toml --target wasm32-unknown-unknown
 	cargo clippy --locked --manifest-path packages/e2ee-core/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
+
+e2ee-wasm-test: e2ee-wasm-check
+	cargo build --locked --manifest-path packages/e2ee-core/Cargo.toml --target wasm32-unknown-unknown --release
+	$(WASM_BINDGEN) packages/e2ee-core/target/wasm32-unknown-unknown/release/halochat_e2ee_core.wasm --target nodejs --out-dir packages/e2ee-core/target/wasm-node
+	node packages/e2ee-core/tests/wasm-roundtrip.cjs
 
 test-e2e:
 	pnpm test:e2e
