@@ -6,6 +6,7 @@ const {
   decryptApplication,
   encryptApplication,
   joinGroup,
+  removeMember,
 } = require("../target/wasm-node/halochat_e2ee_core.js");
 
 const alice = createDevice(Buffer.from("alice/device-1"));
@@ -22,8 +23,13 @@ bobState = received.state;
 assert.equal(Buffer.from(received.plaintext).toString(), "hello from wasm");
 
 const reply = encryptApplication(bobState, Buffer.from("wasm reply"));
+bobState = reply.state;
 const roundTrip = decryptApplication(aliceState, reply.ciphertext);
 assert.equal(Buffer.from(roundTrip.plaintext).toString(), "wasm reply");
+
+const removed = removeMember(roundTrip.state, 1);
+const afterRemoval = encryptApplication(removed.state, Buffer.from("new epoch only"));
+assert.throws(() => decryptApplication(bobState, afterRemoval.ciphertext));
 
 assert.throws(() => createDevice(new Uint8Array()), /identity cannot be empty/);
 console.log("WASM MLS two-member round-trip passed");

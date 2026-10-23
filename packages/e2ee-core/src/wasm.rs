@@ -43,6 +43,12 @@ pub fn add_member(state: Vec<u8>, key_package: Vec<u8>) -> Result<JsValue, JsVal
     ])
 }
 
+#[wasm_bindgen(js_name = removeMember)]
+pub fn remove_member(state: Vec<u8>, leaf_index: u32) -> Result<JsValue, JsValue> {
+    let result = super::remove_member(&state, leaf_index).map_err(to_js_error)?;
+    object_with_bytes(&[("state", &result.state), ("commit", &result.commit)])
+}
+
 #[wasm_bindgen(js_name = joinGroup)]
 pub fn join_group(state: Vec<u8>, welcome: Vec<u8>) -> Result<Vec<u8>, JsValue> {
     super::join_group(&state, &welcome).map_err(to_js_error)

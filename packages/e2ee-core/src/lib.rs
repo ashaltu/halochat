@@ -30,6 +30,11 @@ pub struct AddMemberResult {
     pub welcome: Vec<u8>,
 }
 
+pub struct GroupCommitResult {
+    pub state: Vec<u8>,
+    pub commit: Vec<u8>,
+}
+
 #[derive(Deserialize, Serialize, Zeroize, ZeroizeOnDrop)]
 struct StateSnapshot {
     version: u32,
@@ -258,6 +263,32 @@ pub fn add_member(state: &[u8], encoded_key_package: &[u8]) -> Result<AddMemberR
     })
 }
 
+pub fn remove_member(state: &[u8], leaf_index: u32) -> Result<GroupCommitResult, String> {
+    let (snapshot, provider) = decode_state(state)?;
+    let (mut group, signer) = load_group(&snapshot, &provider)?;
+    let (commit, _, _) = group
+        .remove_members(
+            &provider,
+            &signer,
+            &[openmls::prelude::LeafNodeIndex::new(leaf_index)],
+        )
+        .map_err(|error| error.to_string())?;
+    group
+        .merge_pending_commit(&provider)
+        .map_err(|error| error.to_string())?;
+    let commit = encode_message(&commit)?;
+    let updated_state = encode_state(
+        &provider,
+        snapshot.identity.clone(),
+        snapshot.signature_public_key.clone(),
+        snapshot.group_id.clone(),
+    )?;
+    Ok(GroupCommitResult {
+        state: updated_state,
+        commit,
+    })
+}
+
 pub fn join_group(state: &[u8], encoded_welcome: &[u8]) -> Result<Vec<u8>, String> {
     let (snapshot, provider) = decode_state(state)?;
     if snapshot.group_id.is_some() {
@@ -476,5 +507,19 @@ mod tests {
         let mut snapshot: serde_json::Value = serde_json::from_slice(&identity).unwrap();
         snapshot["version"] = serde_json::Value::from(STATE_VERSION + 1);
         assert!(create_group(&serde_json::to_vec(&snapshot).unwrap(), b"group").is_err());
+    }
+
+    #[test]
+    fn removed_member_cannot_decrypt_messages_from_the_new_epoch() {
+        let (alice_device, _) = create_device(b"alice/device-1").unwrap();
+        let (bob_device, bob_key_package) = create_device(b"bob/device-1").unwrap();
+        let alice_group = create_group(&alice_device, b"removal-test").unwrap();
+        let added = add_member(&alice_group, &bob_key_package).unwrap();
+        let bob_group = join_group(&bob_device, &added.welcome).unwrap();
+
+        let removal = remove_member(&added.state, 1).unwrap();
+        let (_, ciphertext) =
+            encrypt_application(&removal.state, b"message after access ended").unwrap();
+        assert!(decrypt_application(&bob_group, &ciphertext).is_err());
     }
 }
