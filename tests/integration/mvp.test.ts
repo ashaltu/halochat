@@ -705,6 +705,35 @@ describe("HaloChat MVP Integration Tests", () => {
       expect(otherParticipantHistory.body.whispers).toEqual([]);
     });
 
+    it("rejects conflicting concurrent reuse of a Whisper id", async () => {
+      const clientMsgId = `whisper-race-${crypto.randomUUID()}`;
+      const ciphertext = opaqueTransportFixture(clientMsgId, "whisper").ciphertext;
+      const metadata = {
+        protocol: "MLS",
+        version: 1,
+        kind: "whisper",
+        mlsContentType: "application",
+        accessId,
+      };
+      const base = {
+        clientMsgId,
+        ciphertext,
+        encryptionMetadata: metadata,
+        plaintextCharLength: 12,
+      };
+      const [first, altered] = await Promise.all([
+        api(`/api/v1/angel/chats/${chatId}/whispers`, { method: "POST", token: fatimaToken, body: base }),
+        api(`/api/v1/angel/chats/${chatId}/whispers`, {
+          method: "POST",
+          token: fatimaToken,
+          body: { ...base, encryptionMetadata: { ...metadata, senderHint: "changed" } },
+        }),
+      ]);
+
+      expect([first.status, altered.status].sort()).toEqual([201, 409]);
+      expect([first.body.code, altered.body.code]).toContain("CLIENT_MESSAGE_ID_REUSED");
+    });
+
     it("Fatima pauses Aisha's sending ability", async () => {
       const res = await api(`/api/v1/angel/chats/${chatId}/restrict-sending`, {
         method: "POST",

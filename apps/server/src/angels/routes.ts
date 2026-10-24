@@ -1141,7 +1141,8 @@ angelsRouter.post("/angel/chats/:id/whispers", async (c) => {
   if (!insertedWhisper) {
     const [retryWhisper] = await db.select().from(whispers).where(eq(whispers.id, whisperId)).limit(1);
     if (!retryWhisper || retryWhisper.chatId !== chatId || retryWhisper.angelUserId !== angel.id ||
-      retryWhisper.toUserId !== protectedUserId || retryWhisper.ciphertext !== parseResult.data.ciphertext) {
+      retryWhisper.toUserId !== protectedUserId || retryWhisper.ciphertext !== parseResult.data.ciphertext ||
+      canonicalJson(retryWhisper.encryptionMetadata) !== canonicalJson(parseResult.data.encryptionMetadata)) {
       return c.json({ code: "CLIENT_MESSAGE_ID_REUSED", message: "Whisper ID was already used for different content" }, 409);
     }
   }
