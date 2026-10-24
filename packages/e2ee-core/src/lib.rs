@@ -35,6 +35,12 @@ pub struct GroupCommitResult {
     pub commit: Vec<u8>,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ExpectedMember {
+    pub identity: Vec<u8>,
+    pub signature_key: Vec<u8>,
+}
+
 #[derive(Deserialize, Serialize, Zeroize, ZeroizeOnDrop)]
 struct StateSnapshot {
     version: u32,
@@ -156,6 +162,69 @@ fn load_group(
     Ok((group, signer))
 }
 
+fn expected_members_for_group(group: &MlsGroup) -> Result<Vec<ExpectedMember>, String> {
+    let mut members = group
+        .members()
+        .map(|member| {
+            let credential = BasicCredential::try_from(member.credential)
+                .map_err(|error| format!("Unsupported MLS credential: {error}"))?;
+            Ok(ExpectedMember {
+                identity: credential.identity().to_vec(),
+                signature_key: member.signature_key,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    members.sort_by(|left, right| {
+        left.identity
+            .cmp(&right.identity)
+            .then(left.signature_key.cmp(&right.signature_key))
+    });
+    if members
+        .windows(2)
+        .any(|pair| pair[0].identity == pair[1].identity)
+    {
+        return Err("MLS group has duplicate device identities".to_owned());
+    }
+    Ok(members)
+}
+
+fn verify_expected_members(
+    group: &MlsGroup,
+    expected_members: &[ExpectedMember],
+) -> Result<(), String> {
+    let actual = expected_members_for_group(group)?;
+    let mut expected = expected_members.to_vec();
+    expected.sort_by(|left, right| {
+        left.identity
+            .cmp(&right.identity)
+            .then(left.signature_key.cmp(&right.signature_key))
+    });
+    if expected
+        .windows(2)
+        .any(|pair| pair[0].identity == pair[1].identity)
+    {
+        return Err("Expected MLS roster has duplicate device identities".to_owned());
+    }
+    if actual != expected {
+        return Err("MLS commit does not match the expected device roster".to_owned());
+    }
+    Ok(())
+}
+
+pub fn device_identity(state: &[u8]) -> Result<ExpectedMember, String> {
+    let (snapshot, _) = decode_state(state)?;
+    Ok(ExpectedMember {
+        identity: snapshot.identity.clone(),
+        signature_key: snapshot.signature_public_key.clone(),
+    })
+}
+
+pub fn group_members(state: &[u8]) -> Result<Vec<ExpectedMember>, String> {
+    let (snapshot, provider) = decode_state(state)?;
+    let (group, _) = load_group(&snapshot, &provider)?;
+    expected_members_for_group(&group)
+}
+
 fn encode_message(message: &MlsMessageOut) -> Result<Vec<u8>, String> {
     message
         .tls_serialize_detached()
@@ -235,9 +304,20 @@ pub fn create_group(state: &[u8], group_id: &[u8]) -> Result<Vec<u8>, String> {
     )
 }
 
-pub fn add_member(state: &[u8], encoded_key_package: &[u8]) -> Result<AddMemberResult, String> {
+pub fn add_member(
+    state: &[u8],
+    encoded_key_package: &[u8],
+    expected_member: &ExpectedMember,
+) -> Result<AddMemberResult, String> {
     let (snapshot, provider) = decode_state(state)?;
     let (mut group, signer) = load_group(&snapshot, &provider)?;
+    let mut expected_members = expected_members_for_group(&group)?;
+    if expected_members
+        .iter()
+        .any(|member| member.identity == expected_member.identity)
+    {
+        return Err("MLS device identity is already a group member".to_owned());
+    }
     let key_package = KeyPackageIn::tls_deserialize_exact(encoded_key_package)
         .map_err(|error| error.to_string())?
         .validate(provider.crypto(), openmls::prelude::ProtocolVersion::Mls10)
@@ -248,6 +328,8 @@ pub fn add_member(state: &[u8], encoded_key_package: &[u8]) -> Result<AddMemberR
     group
         .merge_pending_commit(&provider)
         .map_err(|error| error.to_string())?;
+    expected_members.push(expected_member.clone());
+    verify_expected_members(&group, &expected_members)?;
     let commit = encode_message(&commit)?;
     let welcome = encode_message(&welcome)?;
     let updated_state = encode_state(
@@ -261,6 +343,32 @@ pub fn add_member(state: &[u8], encoded_key_package: &[u8]) -> Result<AddMemberR
         commit,
         welcome,
     })
+}
+
+pub fn process_commit(
+    state: &[u8],
+    encoded_commit: &[u8],
+    expected_members: &[ExpectedMember],
+) -> Result<Vec<u8>, String> {
+    let (snapshot, provider) = decode_state(state)?;
+    let (mut group, _) = load_group(&snapshot, &provider)?;
+    let processed = group
+        .process_message(&provider, decode_protocol_message(encoded_commit)?)
+        .map_err(|error| error.to_string())?;
+    let staged_commit = match processed.into_content() {
+        ProcessedMessageContent::StagedCommitMessage(commit) => *commit,
+        _ => return Err("Expected an MLS group commit".to_owned()),
+    };
+    group
+        .merge_staged_commit(&provider, staged_commit)
+        .map_err(|error| error.to_string())?;
+    verify_expected_members(&group, expected_members)?;
+    encode_state(
+        &provider,
+        snapshot.identity.clone(),
+        snapshot.signature_public_key.clone(),
+        snapshot.group_id.clone(),
+    )
 }
 
 pub fn remove_member(state: &[u8], leaf_index: u32) -> Result<GroupCommitResult, String> {
@@ -480,7 +588,8 @@ mod tests {
         let (alice_identity, _) = create_device(b"alice/device-1").unwrap();
         let (bob_identity, bob_key_package) = create_device(b"bob/device-1").unwrap();
         let alice_group = create_group(&alice_identity, b"chat-group-1").unwrap();
-        let added = add_member(&alice_group, &bob_key_package).unwrap();
+        let bob_member = device_identity(&bob_identity).unwrap();
+        let added = add_member(&alice_group, &bob_key_package, &bob_member).unwrap();
         let (alice_group, welcome) = (added.state, added.welcome);
         let bob_group = join_group(&bob_identity, &welcome).unwrap();
 
@@ -501,7 +610,8 @@ mod tests {
 
         let (identity, _) = create_device(b"alice/device-1").unwrap();
         assert!(create_group(&identity, b"").is_err());
-        assert!(add_member(&identity, b"invalid-key-package").is_err());
+        let member = device_identity(&identity).unwrap();
+        assert!(add_member(&identity, b"invalid-key-package", &member).is_err());
         assert!(encrypt_application(&identity, b"no group").is_err());
 
         let mut snapshot: serde_json::Value = serde_json::from_slice(&identity).unwrap();
@@ -514,12 +624,42 @@ mod tests {
         let (alice_device, _) = create_device(b"alice/device-1").unwrap();
         let (bob_device, bob_key_package) = create_device(b"bob/device-1").unwrap();
         let alice_group = create_group(&alice_device, b"removal-test").unwrap();
-        let added = add_member(&alice_group, &bob_key_package).unwrap();
+        let bob_member = device_identity(&bob_device).unwrap();
+        let added = add_member(&alice_group, &bob_key_package, &bob_member).unwrap();
         let bob_group = join_group(&bob_device, &added.welcome).unwrap();
 
         let removal = remove_member(&added.state, 1).unwrap();
         let (_, ciphertext) =
             encrypt_application(&removal.state, b"message after access ended").unwrap();
         assert!(decrypt_application(&bob_group, &ciphertext).is_err());
+    }
+
+    #[test]
+    fn incoming_commit_is_merged_only_when_roster_matches_expectation() {
+        let (alice_device, _) = create_device(b"alice/device-1").unwrap();
+        let (bob_device, bob_key_package) = create_device(b"bob/device-1").unwrap();
+        let (charlie_device, charlie_key_package) = create_device(b"charlie/device-1").unwrap();
+        let (_, mallory_key_package) = create_device(b"mallory/device-1").unwrap();
+        let alice_group = create_group(&alice_device, b"commit-test").unwrap();
+        let bob_member = device_identity(&bob_device).unwrap();
+        let alice_added = add_member(&alice_group, &bob_key_package, &bob_member).unwrap();
+        let bob_group = join_group(&bob_device, &alice_added.welcome).unwrap();
+
+        let charlie_member = device_identity(&charlie_device).unwrap();
+        assert!(add_member(&alice_added.state, &mallory_key_package, &charlie_member).is_err());
+        let alice_updated =
+            add_member(&alice_added.state, &charlie_key_package, &charlie_member).unwrap();
+        let expected_roster = group_members(&alice_updated.state).unwrap();
+        let wrong_roster = vec![device_identity(&bob_device).unwrap()];
+        assert!(process_commit(&bob_group, &alice_updated.commit, &wrong_roster).is_err());
+
+        let bob_updated =
+            process_commit(&bob_group, &alice_updated.commit, &expected_roster).unwrap();
+        let (alice_updated, ciphertext) =
+            encrypt_application(&alice_updated.state, b"commit applied before app message")
+                .unwrap();
+        let (_, plaintext) = decrypt_application(&bob_updated, &ciphertext).unwrap();
+        assert_eq!(plaintext, b"commit applied before app message");
+        assert!(!alice_updated.is_empty());
     }
 }

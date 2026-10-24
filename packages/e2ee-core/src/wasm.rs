@@ -1,4 +1,4 @@
-use js_sys::{Object, Reflect, Uint8Array};
+use js_sys::{Array, Object, Reflect, Uint8Array};
 use wasm_bindgen::prelude::*;
 
 fn bytes_field(object: &Object, key: &str, bytes: &[u8]) -> Result<(), JsValue> {
@@ -22,6 +22,33 @@ fn to_js_error(error: String) -> JsValue {
     JsValue::from_str(&error)
 }
 
+fn parse_expected_members(encoded: &[u8]) -> Result<Vec<super::ExpectedMember>, JsValue> {
+    serde_json::from_slice(encoded).map_err(|error| JsValue::from_str(&error.to_string()))
+}
+
+fn member_value(member: &super::ExpectedMember) -> Result<JsValue, JsValue> {
+    object_with_bytes(&[
+        ("identity", &member.identity),
+        ("signatureKey", &member.signature_key),
+    ])
+}
+
+#[wasm_bindgen(js_name = deviceIdentity)]
+pub fn device_identity(state: Vec<u8>) -> Result<JsValue, JsValue> {
+    let member = super::device_identity(&state).map_err(to_js_error)?;
+    member_value(&member)
+}
+
+#[wasm_bindgen(js_name = groupMembers)]
+pub fn group_members(state: Vec<u8>) -> Result<JsValue, JsValue> {
+    let members = super::group_members(&state).map_err(to_js_error)?;
+    let result = Array::new();
+    for member in members {
+        result.push(&member_value(&member)?);
+    }
+    Ok(result.into())
+}
+
 #[wasm_bindgen(js_name = createDevice)]
 pub fn create_device(identity: Vec<u8>) -> Result<JsValue, JsValue> {
     let (state, key_package) = super::create_device(&identity).map_err(to_js_error)?;
@@ -34,13 +61,29 @@ pub fn create_group(state: Vec<u8>, group_id: Vec<u8>) -> Result<Vec<u8>, JsValu
 }
 
 #[wasm_bindgen(js_name = addMember)]
-pub fn add_member(state: Vec<u8>, key_package: Vec<u8>) -> Result<JsValue, JsValue> {
-    let result = super::add_member(&state, &key_package).map_err(to_js_error)?;
+pub fn add_member(
+    state: Vec<u8>,
+    key_package: Vec<u8>,
+    expected_member: Vec<u8>,
+) -> Result<JsValue, JsValue> {
+    let expected_member: super::ExpectedMember = serde_json::from_slice(&expected_member)
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    let result = super::add_member(&state, &key_package, &expected_member).map_err(to_js_error)?;
     object_with_bytes(&[
         ("state", &result.state),
         ("commit", &result.commit),
         ("welcome", &result.welcome),
     ])
+}
+
+#[wasm_bindgen(js_name = processCommit)]
+pub fn process_commit(
+    state: Vec<u8>,
+    commit: Vec<u8>,
+    expected_members: Vec<u8>,
+) -> Result<Vec<u8>, JsValue> {
+    let members = parse_expected_members(&expected_members)?;
+    super::process_commit(&state, &commit, &members).map_err(to_js_error)
 }
 
 #[wasm_bindgen(js_name = removeMember)]
