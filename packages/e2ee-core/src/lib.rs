@@ -683,6 +683,7 @@ mod tests {
             encrypt_application(&alice_group, b"opaque state hello").unwrap();
         let (bob_group, plaintext) = decrypt_application(&bob_group, &ciphertext).unwrap();
         assert_eq!(plaintext, b"opaque state hello");
+        assert!(decrypt_application(&bob_group, &ciphertext).is_err());
 
         let (_, reply) = encrypt_application(&bob_group, b"reply after state restore").unwrap();
         let (_, plaintext) = decrypt_application(&alice_group, &reply).unwrap();

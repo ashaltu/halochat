@@ -68,6 +68,7 @@ aliceState = sent.state;
 const received = decryptApplication(bobState, sent.ciphertext);
 bobState = received.state;
 assert.equal(Buffer.from(received.plaintext).toString(), "hello from wasm");
+assert.throws(() => decryptApplication(bobState, sent.ciphertext));
 const charlieReceived = decryptApplication(charlieState, sent.ciphertext);
 charlieState = charlieReceived.state;
 assert.equal(Buffer.from(charlieReceived.plaintext).toString(), "hello from wasm");
