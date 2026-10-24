@@ -180,6 +180,12 @@ fn expected_members_for_group(group: &MlsGroup) -> Result<Vec<ExpectedMember>, S
             .then(left.signature_key.cmp(&right.signature_key))
     });
     if members
+        .iter()
+        .any(|member| member.identity.is_empty() || member.signature_key.is_empty())
+    {
+        return Err("MLS group contains an incomplete device identity".to_owned());
+    }
+    if members
         .windows(2)
         .any(|pair| pair[0].identity == pair[1].identity)
     {
@@ -199,6 +205,12 @@ fn verify_expected_members(
             .cmp(&right.identity)
             .then(left.signature_key.cmp(&right.signature_key))
     });
+    if expected
+        .iter()
+        .any(|member| member.identity.is_empty() || member.signature_key.is_empty())
+    {
+        return Err("Expected MLS roster contains an incomplete device identity".to_owned());
+    }
     if expected
         .windows(2)
         .any(|pair| pair[0].identity == pair[1].identity)
@@ -311,6 +323,9 @@ pub fn add_member(
 ) -> Result<AddMemberResult, String> {
     let (snapshot, provider) = decode_state(state)?;
     let (mut group, signer) = load_group(&snapshot, &provider)?;
+    if expected_member.identity.is_empty() || expected_member.signature_key.is_empty() {
+        return Err("Expected MLS device identity cannot be empty".to_owned());
+    }
     let mut expected_members = expected_members_for_group(&group)?;
     if expected_members
         .iter()
@@ -646,6 +661,9 @@ mod tests {
         let bob_group = join_group(&bob_device, &alice_added.welcome).unwrap();
 
         let charlie_member = device_identity(&charlie_device).unwrap();
+        let mut incomplete_member = charlie_member.clone();
+        incomplete_member.signature_key.clear();
+        assert!(add_member(&alice_added.state, &charlie_key_package, &incomplete_member).is_err());
         assert!(add_member(&alice_added.state, &mallory_key_package, &charlie_member).is_err());
         let alice_updated =
             add_member(&alice_added.state, &charlie_key_package, &charlie_member).unwrap();
