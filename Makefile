@@ -61,6 +61,7 @@ e2ee-wasm-web: e2ee-wasm-check
 	$(CARGO_ENV) cargo build --locked --manifest-path packages/e2ee-core/Cargo.toml --target wasm32-unknown-unknown --release
 	mkdir -p apps/mobile/modules/halochat-e2ee/src/wasm
 	$(WASM_BINDGEN) packages/e2ee-core/target/wasm32-unknown-unknown/release/halochat_e2ee_core.wasm --target web --out-dir apps/mobile/modules/halochat-e2ee/src/wasm
+	node scripts/patch-wasm-bindgen-web.cjs apps/mobile/modules/halochat-e2ee/src/wasm/halochat_e2ee_core.js
 	mkdir -p apps/mobile/public
 	cp apps/mobile/modules/halochat-e2ee/src/wasm/halochat_e2ee_core_bg.wasm apps/mobile/public/
 
@@ -73,8 +74,8 @@ e2ee-wasm-browser-test: e2ee-wasm-browser-assets
 mobile-web-build: e2ee-wasm-web
 	pnpm --filter @halochat/mobile exec expo export --platform web
 
-test-e2e: e2ee-wasm-browser-assets
-	pnpm test:e2e
+test-e2e: e2ee-wasm-web e2ee-wasm-browser-assets
+	pnpm test:e2e $(PLAYWRIGHT_ARGS)
 
 dev-server:
 	pnpm dev:server
