@@ -6,12 +6,16 @@ import {
   hasPublishedChatKeyPackage,
   getE2eeContext,
   getTrustedChatSafetyCode,
+  loadPendingChatKeyPackage,
   initializeE2eeDevice,
+  clearPendingChatKeyPackage,
   loadE2eeState,
   loadE2eeStateRecord,
   markChatKeyPackagePublished,
+  savePendingChatKeyPackage,
   saveE2eeState,
   trustChatSafetyCode,
+  type E2eePendingKeyPackage,
   type E2eeLocalData,
   type E2eePendingMessage,
 } from "./state-store.js";
@@ -141,22 +145,38 @@ async function publishChatKeyPackage(userId: string, chatId: string, scope = "PA
     if (!deviceState) throw new Error("E2EE device state is unavailable");
 
     if (!(await hasPublishedChatKeyPackage(userId, chatId, scope))) {
-      const member = await E2eeNative.deviceIdentity(deviceState);
-      const created = await E2eeNative.createKeyPackage(deviceState);
-      const signatureProof = await E2eeNative.signDeviceBinding(created.state, asciiBytes(userId), asciiBytes(device.deviceId));
-      await saveE2eeState(userId, "device", created.state);
-      await apiRequest(`/api/v1/chats/${chatId}/crypto/key-packages`, {
-        method: "POST",
-        body: JSON.stringify({
+      const publicationKey = `${chatId}:${scope}`;
+      let pending = await loadPendingChatKeyPackage(userId, publicationKey);
+      if (pending && pending.deviceId !== device.deviceId) {
+        throw new Error("Pending E2EE KeyPackage belongs to a different device");
+      }
+      if (!pending) {
+        const member = await E2eeNative.deviceIdentity(deviceState);
+        const created = await E2eeNative.createKeyPackage(deviceState);
+        const signatureProof = await E2eeNative.signDeviceBinding(created.state, asciiBytes(userId), asciiBytes(device.deviceId));
+        await saveE2eeState(userId, "device", created.state);
+        pending = {
           deviceId: device.deviceId,
-          ...(scope === "PARTICIPANT" ? {} : { scope }),
           identity: base64.fromByteArray(member.identity),
           signatureKey: base64.fromByteArray(member.signatureKey),
           signatureProof: base64.fromByteArray(signatureProof),
           keyPackage: base64.fromByteArray(created.keyPackage),
+        } satisfies E2eePendingKeyPackage;
+        await savePendingChatKeyPackage(userId, publicationKey, pending);
+      }
+      await apiRequest(`/api/v1/chats/${chatId}/crypto/key-packages`, {
+        method: "POST",
+        body: JSON.stringify({
+          deviceId: pending.deviceId,
+          ...(scope === "PARTICIPANT" ? {} : { scope }),
+          identity: pending.identity,
+          signatureKey: pending.signatureKey,
+          signatureProof: pending.signatureProof,
+          keyPackage: pending.keyPackage,
         }),
       });
       await markChatKeyPackagePublished(userId, chatId, scope);
+      await clearPendingChatKeyPackage(userId, publicationKey);
     }
 
     return loadE2eeState(userId, "device");

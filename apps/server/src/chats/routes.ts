@@ -20,6 +20,7 @@ import {
   desc,
   asc,
   isNull,
+  sql,
 } from "@halochat/db";
 import { authMiddleware } from "../auth/index.js";
 import {
@@ -396,6 +397,13 @@ chatsRouter.post("/:id/crypto/key-packages", async (c) => {
     return c.json({ code: "INVALID_DEVICE_BINDING", message: "Device signing key did not prove this account binding" }, 400);
   }
 
+  const samePublication = sql`(
+    ${cryptoKeyPackages.identity} = ${parsed.data.identity} and
+    ${cryptoKeyPackages.signatureKey} = ${parsed.data.signatureKey} and
+    ${cryptoKeyPackages.signatureProof} = ${parsed.data.signatureProof} and
+    ${cryptoKeyPackages.keyPackage} = ${parsed.data.keyPackage}
+  )`;
+  const publishedAt = new Date();
   await db.insert(cryptoKeyPackages).values({
     id: crypto.randomUUID(),
     chatId,
@@ -414,10 +422,10 @@ chatsRouter.post("/:id/crypto/key-packages", async (c) => {
       signatureKey: parsed.data.signatureKey,
       signatureProof: parsed.data.signatureProof,
       keyPackage: parsed.data.keyPackage,
-      claimedByDeviceId: null,
-      consumedAt: null,
-      consumedByClientMsgId: null,
-      createdAt: new Date(),
+      claimedByDeviceId: sql`case when ${samePublication} then ${cryptoKeyPackages.claimedByDeviceId} else null end`,
+      consumedAt: sql`case when ${samePublication} then ${cryptoKeyPackages.consumedAt} else null end`,
+      consumedByClientMsgId: sql`case when ${samePublication} then ${cryptoKeyPackages.consumedByClientMsgId} else null end`,
+      createdAt: sql`case when ${samePublication} then ${cryptoKeyPackages.createdAt} else ${publishedAt} end`,
     },
   });
 

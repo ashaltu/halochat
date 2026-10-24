@@ -438,6 +438,17 @@ describe("HaloChat MVP Integration Tests", () => {
         signatureProof: aishaBinding.signatureProof,
           keyPackage,
         });
+        const retriedPublication = await api(`/api/v1/chats/${chatId}/crypto/key-packages`, {
+          method: "POST",
+          token: aishaToken,
+          body: { ...aishaBinding, keyPackage },
+        });
+        expect(retriedPublication.status).toBe(200);
+        const recoveredClaim = await api(
+          `/api/v1/chats/${chatId}/crypto/key-packages/${aishaId}?deviceId=${omarDeviceId}`,
+          { token: omarToken },
+        );
+        expect(recoveredClaim.status).toBe(200);
         const rejected = await api(`/api/v1/chats/${chatId}/crypto/key-packages/${aishaId}?deviceId=device_other_0123456789`, { token: omarToken });
         expect(rejected.status).toBe(409);
         expect(rejected.body.code).toBe("KEY_PACKAGE_UNAVAILABLE");

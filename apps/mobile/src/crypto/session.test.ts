@@ -12,9 +12,14 @@ const { apiRequest, native, stateStore } = vi.hoisted(() => ({
     groupMembers: vi.fn(),
     encryptApplication: vi.fn(),
     generateDeviceKey: vi.fn(),
+    createKeyPackage: vi.fn(),
+    signDeviceBinding: vi.fn(),
   },
   stateStore: {
     hasPublishedChatKeyPackage: vi.fn(),
+    loadPendingChatKeyPackage: vi.fn(),
+    savePendingChatKeyPackage: vi.fn(),
+    clearPendingChatKeyPackage: vi.fn(),
     getE2eeContext: vi.fn(),
     initializeE2eeDevice: vi.fn(),
     loadE2eeState: vi.fn(),
@@ -33,12 +38,50 @@ import { ensureChatE2ee, ensureWhisperGroup, forwardChatMessagesToAngel } from "
 describe("Whisper device credentials", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    stateStore.hasPublishedChatKeyPackage.mockResolvedValue(true);
+    stateStore.loadPendingChatKeyPackage.mockResolvedValue(null);
     stateStore.initializeE2eeDevice.mockResolvedValue({ deviceId: "angel-device" });
     stateStore.loadE2eeState.mockResolvedValue(new Uint8Array([1]));
-    stateStore.hasPublishedChatKeyPackage.mockResolvedValue(true);
     stateStore.getE2eeContext.mockResolvedValue(new Uint8Array([5]));
     stateStore.loadE2eeStateRecord.mockResolvedValue(null);
     native.verifyDeviceBinding.mockResolvedValue(false);
+  });
+
+  it("retries an exact persisted KeyPackage after an ambiguous publication failure", async () => {
+    let pending: any = null;
+    stateStore.hasPublishedChatKeyPackage.mockResolvedValue(false);
+    stateStore.loadPendingChatKeyPackage.mockImplementation(async () => pending);
+    stateStore.savePendingChatKeyPackage.mockImplementation(async (_userId: string, _key: string, value: any) => {
+      pending = value;
+    });
+    stateStore.clearPendingChatKeyPackage.mockImplementation(async () => { pending = null; });
+    native.deviceIdentity.mockResolvedValue({ identity: new Uint8Array([1]), signatureKey: new Uint8Array([2]) });
+    native.createKeyPackage.mockResolvedValue({ state: new Uint8Array([3]), keyPackage: new Uint8Array([4]) });
+    native.signDeviceBinding.mockResolvedValue(new Uint8Array([5]));
+    const publishedPayloads: unknown[] = [];
+    let firstPublish = true;
+    apiRequest.mockImplementation(async (path: string, options?: RequestInit) => {
+      if (path.endsWith("/crypto/key-packages")) {
+        publishedPayloads.push(JSON.parse(String(options?.body)));
+        if (firstPublish) {
+          firstPublish = false;
+          throw new Error("Network request failed after server accepted publication");
+        }
+        return {};
+      }
+      throw Object.assign(new Error("No peer KeyPackage"), { code: "KEY_PACKAGE_UNAVAILABLE" });
+    });
+
+    await expect(ensureChatE2ee("requester", "chat-id", "recipient", "requester"))
+      .rejects.toThrow("Network request failed after server accepted publication");
+    await expect(ensureChatE2ee("requester", "chat-id", "recipient", "requester"))
+      .resolves.toBe("waiting");
+
+    expect(native.createKeyPackage).toHaveBeenCalledOnce();
+    expect(stateStore.savePendingChatKeyPackage).toHaveBeenCalledOnce();
+    expect(stateStore.clearPendingChatKeyPackage).toHaveBeenCalledOnce();
+    expect(publishedPayloads).toHaveLength(2);
+    expect(publishedPayloads[1]).toEqual(publishedPayloads[0]);
   });
 
   it("rejects an unbound protected-user device before adding it to a Whisper group", async () => {

@@ -21,11 +21,20 @@ export type E2eePendingMessage = {
   angelForward?: { accessId: string; sourceMessageId: string; sourceSeq: number };
 };
 
+export type E2eePendingKeyPackage = {
+  deviceId: string;
+  identity: string;
+  signatureKey: string;
+  signatureProof: string;
+  keyPackage: string;
+};
+
 export type E2eeLocalData = {
   lastSeq: number;
   pendingMessages: E2eePendingMessage[];
   plaintextByMessageId: Record<string, string>;
   forwardedMessageIds?: Record<string, string>;
+  pendingKeyPackages?: Record<string, E2eePendingKeyPackage>;
 };
 
 export type E2eeStateRecord = {
@@ -171,9 +180,16 @@ function utf8String(value: Uint8Array): string {
 function isLocalData(value: unknown): value is E2eeLocalData {
   if (!value || typeof value !== "object") return false;
   const data = value as Partial<E2eeLocalData>;
+  const pendingKeyPackages = data.pendingKeyPackages;
   return Number.isSafeInteger(data.lastSeq) && data.lastSeq! >= 0 &&
     Array.isArray(data.pendingMessages) &&
-    !!data.plaintextByMessageId && typeof data.plaintextByMessageId === "object";
+    !!data.plaintextByMessageId && typeof data.plaintextByMessageId === "object" &&
+    (pendingKeyPackages === undefined || (!!pendingKeyPackages && typeof pendingKeyPackages === "object" &&
+      !Array.isArray(pendingKeyPackages) && Object.values(pendingKeyPackages).every((item) =>
+        !!item && typeof item === "object" && typeof item.deviceId === "string" &&
+        typeof item.identity === "string" && typeof item.signatureKey === "string" &&
+        typeof item.signatureProof === "string" && typeof item.keyPackage === "string"
+      )));
 }
 
 async function readStateFile(userId: string, chatId: string, device: DeviceContext) {
@@ -217,6 +233,38 @@ export async function hasPublishedChatKeyPackage(userId: string, chatId: string,
 
 export async function markChatKeyPackagePublished(userId: string, chatId: string, scope = "PARTICIPANT") {
   await SecureStore.setItemAsync(keyPackagePublishedKey(userId, `${chatId}:${scope}:proof-v1`), "1", secureStoreOptions());
+}
+
+export async function loadPendingChatKeyPackage(userId: string, publicationKey: string) {
+  const record = await loadE2eeStateRecord(userId, "device");
+  return record?.localData.pendingKeyPackages?.[safeFilePart(publicationKey)] ?? null;
+}
+
+export async function savePendingChatKeyPackage(
+  userId: string,
+  publicationKey: string,
+  pending: E2eePendingKeyPackage,
+) {
+  const record = await loadE2eeStateRecord(userId, "device");
+  if (!record) throw new Error("E2EE device state is unavailable");
+  await saveE2eeState(userId, "device", record.state, {
+    ...record.localData,
+    pendingKeyPackages: {
+      ...record.localData.pendingKeyPackages,
+      [safeFilePart(publicationKey)]: pending,
+    },
+  });
+}
+
+export async function clearPendingChatKeyPackage(userId: string, publicationKey: string) {
+  const record = await loadE2eeStateRecord(userId, "device");
+  if (!record?.localData.pendingKeyPackages?.[safeFilePart(publicationKey)]) return;
+  const pendingKeyPackages = { ...record.localData.pendingKeyPackages };
+  delete pendingKeyPackages[safeFilePart(publicationKey)];
+  await saveE2eeState(userId, "device", record.state, {
+    ...record.localData,
+    pendingKeyPackages,
+  });
 }
 
 export async function getTrustedChatSafetyCode(userId: string, chatId: string) {
