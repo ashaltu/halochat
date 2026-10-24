@@ -109,7 +109,11 @@ async function getDeviceContext(userId: string): Promise<DeviceContext> {
       const idBytes = await E2eeNative.generateDeviceKey();
       const keyBytes = await E2eeNative.generateDeviceKey();
       deviceId = base64.fromByteArray(idBytes.subarray(0, 16));
-      encodedKey = base64.fromByteArray(keyBytes);
+      try {
+        encodedKey = base64.fromByteArray(keyBytes);
+      } finally {
+        keyBytes.fill(0);
+      }
       await SecureStore.setItemAsync(deviceKeyKey(userId), encodedKey, secureStoreOptions());
       await SecureStore.setItemAsync(deviceIdKey(userId), deviceId, secureStoreOptions());
     }

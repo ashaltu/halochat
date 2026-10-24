@@ -148,11 +148,18 @@ async function getDeviceContext(userId: string): Promise<DeviceContext> {
       const deviceId = base64.fromByteArray(crypto.getRandomValues(new Uint8Array(16)));
       const deviceKey = await E2eeWeb.generateDeviceKey();
       const iv = crypto.getRandomValues(new Uint8Array(12));
-      const encryptedKey = await crypto.subtle.encrypt({
-        name: "AES-GCM",
-        iv: buffer(iv),
-        additionalData: buffer(bytes(`halochat:web-device-key:v1:${userId}`)),
-      }, masterKey, buffer(deviceKey));
+      const keyInput = buffer(deviceKey);
+      let encryptedKey: ArrayBuffer;
+      try {
+        encryptedKey = await crypto.subtle.encrypt({
+          name: "AES-GCM",
+          iv: buffer(iv),
+          additionalData: buffer(bytes(`halochat:web-device-key:v1:${userId}`)),
+        }, masterKey, keyInput);
+      } finally {
+        deviceKey.fill(0);
+        new Uint8Array(keyInput).fill(0);
+      }
       const candidate = {
         deviceId,
         iv: base64.fromByteArray(iv),

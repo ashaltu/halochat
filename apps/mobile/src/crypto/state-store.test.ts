@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   secureValues: new Map<string, string>(),
@@ -22,6 +22,10 @@ vi.mock("@halochat/e2ee-native", () => ({
 
 import { clearE2eeMemory, getE2eeContext } from "./state-store.js";
 
+afterEach(async () => {
+  await clearE2eeMemory("user-id");
+});
+
 describe("E2EE memory lifecycle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -34,12 +38,16 @@ describe("E2EE memory lifecycle", () => {
 
   it("zeroes the cached device key and reloads it from protected storage", async () => {
     let generation = 0;
+    const generatedKeys: Uint8Array[] = [];
     mocks.generateDeviceKey.mockImplementation(async () => {
-      return new Uint8Array(32).fill(++generation);
+      const key = new Uint8Array(32).fill(++generation);
+      generatedKeys.push(key);
+      return key;
     });
     const fill = vi.spyOn(Uint8Array.prototype, "fill");
 
     await getE2eeContext("user-id", "chat-id");
+    expect(generatedKeys[1]).toEqual(new Uint8Array(32));
 
     await clearE2eeMemory("user-id");
 
@@ -51,5 +59,17 @@ describe("E2EE memory lifecycle", () => {
     expect(mocks.getItemAsync).toHaveBeenCalledTimes(4);
     expect(mocks.generateDeviceKey).toHaveBeenCalledTimes(2);
     fill.mockRestore();
+  });
+
+  it("zeroes a generated device key when protected storage rejects it", async () => {
+    const generatedSecret = new Uint8Array(32).fill(9);
+    mocks.generateDeviceKey
+      .mockResolvedValueOnce(new Uint8Array(32).fill(1))
+      .mockResolvedValueOnce(generatedSecret);
+    mocks.setItemAsync.mockRejectedValueOnce(new Error("Secure storage is unavailable"));
+
+    await expect(getE2eeContext("user-id", "chat-id")).rejects.toThrow("Secure storage is unavailable");
+
+    expect(generatedSecret).toEqual(new Uint8Array(32));
   });
 });
