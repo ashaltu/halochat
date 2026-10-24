@@ -183,12 +183,12 @@ async function readStateFile(userId: string, chatId: string, device: DeviceConte
   return { filename, stateEnvelope: parsed.envelope, localData };
 }
 
-export async function hasPublishedChatKeyPackage(userId: string, chatId: string) {
-  return (await SecureStore.getItemAsync(keyPackagePublishedKey(userId, chatId))) === "1";
+export async function hasPublishedChatKeyPackage(userId: string, chatId: string, scope = "PARTICIPANT") {
+  return (await SecureStore.getItemAsync(keyPackagePublishedKey(userId, `${chatId}:${scope}`))) === "1";
 }
 
-export async function markChatKeyPackagePublished(userId: string, chatId: string) {
-  await SecureStore.setItemAsync(keyPackagePublishedKey(userId, chatId), "1", secureStoreOptions());
+export async function markChatKeyPackagePublished(userId: string, chatId: string, scope = "PARTICIPANT") {
+  await SecureStore.setItemAsync(keyPackagePublishedKey(userId, `${chatId}:${scope}`), "1", secureStoreOptions());
 }
 
 export async function getTrustedChatSafetyCode(userId: string, chatId: string) {

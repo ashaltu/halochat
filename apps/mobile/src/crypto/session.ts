@@ -110,12 +110,12 @@ async function flushOutbox(userId: string, chatId: string) {
   return record.localData.pendingMessages.length;
 }
 
-async function publishChatKeyPackage(userId: string, chatId: string) {
+async function publishChatKeyPackage(userId: string, chatId: string, scope = "PARTICIPANT") {
   const device = await initializeE2eeDevice(userId);
   const deviceState = await loadE2eeState(userId, "device");
   if (!deviceState) throw new Error("E2EE device state is unavailable");
 
-  if (!(await hasPublishedChatKeyPackage(userId, chatId))) {
+  if (!(await hasPublishedChatKeyPackage(userId, chatId, scope))) {
     const member = await E2eeNative.deviceIdentity(deviceState);
     const created = await E2eeNative.createKeyPackage(deviceState);
     const signatureProof = await E2eeNative.signDeviceBinding(created.state, asciiBytes(userId), asciiBytes(device.deviceId));
@@ -124,13 +124,14 @@ async function publishChatKeyPackage(userId: string, chatId: string) {
       method: "POST",
       body: JSON.stringify({
         deviceId: device.deviceId,
+        ...(scope === "PARTICIPANT" ? {} : { scope }),
         identity: base64.fromByteArray(member.identity),
         signatureKey: base64.fromByteArray(member.signatureKey),
         signatureProof: base64.fromByteArray(signatureProof),
         keyPackage: base64.fromByteArray(created.keyPackage),
       }),
     });
-    await markChatKeyPackagePublished(userId, chatId);
+    await markChatKeyPackagePublished(userId, chatId, scope);
   }
 
   return loadE2eeState(userId, "device");

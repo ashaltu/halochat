@@ -154,6 +154,40 @@ async function consumeWelcomeKeyPackage(
   return !!existingClaim;
 }
 
+function parseWhisperScope(scope: string) {
+  const match = /^WHISPER:([^:\s]{1,80}):([^:\s]{1,80})$/.exec(scope);
+  if (!match || match[1] === match[2]) return null;
+  return { protectedUserId: match[1], angelUserId: match[2] };
+}
+
+async function isWhisperScopeMember(
+  db: Awaited<ReturnType<typeof getDb>>,
+  chatId: string,
+  userId: string,
+  scope: string,
+) {
+  const pair = parseWhisperScope(scope);
+  if (!pair || (userId !== pair.protectedUserId && userId !== pair.angelUserId)) return false;
+
+  const [chat] = await db.select().from(chats).where(eq(chats.id, chatId)).limit(1);
+  if (!chat || (chat.requesterUserId !== pair.protectedUserId && chat.recipientUserId !== pair.protectedUserId)) {
+    return false;
+  }
+
+  const access = await db.select({ id: chatAngelAccess.id })
+    .from(chatAngelAccess)
+    .innerJoin(angelAssignments, eq(chatAngelAccess.angelAssignmentId, angelAssignments.id))
+    .where(and(
+      eq(chatAngelAccess.chatId, chatId),
+      eq(chatAngelAccess.angelUserId, pair.angelUserId),
+      isNull(chatAngelAccess.authorizedUntil),
+      eq(angelAssignments.userId, pair.protectedUserId),
+      eq(angelAssignments.angelUserId, pair.angelUserId),
+      eq(angelAssignments.status, "ACTIVE"),
+    )).limit(1);
+  return access.length > 0;
+}
+
 chatsRouter.get("/", async (c) => {
   const currentUser = c.get("user");
   const db = await getDb();
@@ -322,7 +356,11 @@ chatsRouter.post("/:id/crypto/key-packages", async (c) => {
 
   const db = await getDb();
   const [chat] = await db.select().from(chats).where(eq(chats.id, chatId)).limit(1);
-  if (!chat || (chat.requesterUserId !== currentUser.id && chat.recipientUserId !== currentUser.id)) {
+  const scope = parsed.data.scope ?? "PARTICIPANT";
+  const authorized = scope === "PARTICIPANT"
+    ? !!chat && (chat.requesterUserId === currentUser.id || chat.recipientUserId === currentUser.id)
+    : await isWhisperScopeMember(db, chatId, currentUser.id, scope);
+  if (!chat || !authorized) {
     return c.json({ code: "NOT_FOUND", message: "Chat not found" }, 404);
   }
   if (chat.status !== "ACTIVE") {
@@ -345,7 +383,7 @@ chatsRouter.post("/:id/crypto/key-packages", async (c) => {
     chatId,
     userId: currentUser.id,
     deviceId: parsed.data.deviceId,
-    scope: "PARTICIPANT",
+    scope,
     identity: parsed.data.identity,
     signatureKey: parsed.data.signatureKey,
     keyPackage: parsed.data.keyPackage,
@@ -371,13 +409,23 @@ chatsRouter.get("/:id/crypto/key-packages/:userId", async (c) => {
   const chatId = c.req.param("id");
   const targetUserId = c.req.param("userId");
   const claimantDeviceId = c.req.query("deviceId");
+  const scope = c.req.query("scope") ?? "PARTICIPANT";
   const db = await getDb();
   const [chat] = await db.select().from(chats).where(eq(chats.id, chatId)).limit(1);
-  if (!chat || (chat.requesterUserId !== currentUser.id && chat.recipientUserId !== currentUser.id)) {
+  const authorized = scope === "PARTICIPANT"
+    ? !!chat && (chat.requesterUserId === currentUser.id || chat.recipientUserId === currentUser.id)
+    : await isWhisperScopeMember(db, chatId, currentUser.id, scope);
+  if (!chat || !authorized) {
     return c.json({ code: "NOT_FOUND", message: "Chat not found" }, 404);
   }
 
-  const partnerUserId = chat.requesterUserId === currentUser.id ? chat.recipientUserId : chat.requesterUserId;
+  const whisperPair = scope === "PARTICIPANT" ? null : parseWhisperScope(scope);
+  if (scope !== "PARTICIPANT" && !whisperPair) {
+    return c.json({ code: "NOT_FOUND", message: "Key package not found" }, 404);
+  }
+  const partnerUserId = whisperPair
+    ? (currentUser.id === whisperPair.protectedUserId ? whisperPair.angelUserId : whisperPair.protectedUserId)
+    : chat.requesterUserId === currentUser.id ? chat.recipientUserId : chat.requesterUserId;
   if (targetUserId !== partnerUserId) {
     return c.json({ code: "NOT_FOUND", message: "Key package not found" }, 404);
   }
@@ -391,7 +439,7 @@ chatsRouter.get("/:id/crypto/key-packages/:userId", async (c) => {
   const candidates = await db.select().from(cryptoKeyPackages).where(and(
     eq(cryptoKeyPackages.chatId, chatId),
     eq(cryptoKeyPackages.userId, partnerUserId),
-    eq(cryptoKeyPackages.scope, "PARTICIPANT"),
+    eq(cryptoKeyPackages.scope, scope),
     isNull(cryptoKeyPackages.consumedAt),
     or(isNull(cryptoKeyPackages.claimedByDeviceId), eq(cryptoKeyPackages.claimedByDeviceId, claimantDeviceId)),
   )).orderBy(asc(cryptoKeyPackages.createdAt)).limit(1);

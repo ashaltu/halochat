@@ -554,6 +554,41 @@ describe("HaloChat MVP Integration Tests", () => {
       chatId = res.body.chats[0].id;
     });
 
+    it("scopes Whisper KeyPackages to the protected user and their authorized Angel", async () => {
+      const scope = `WHISPER:${aishaId}:${fatimaId}`;
+      const aishaDeviceId = "device_aisha_whisper_0123";
+      const fatimaDeviceId = "device_fatima_whisper_0123";
+      const aishaBinding = createDeviceBinding(aishaId, aishaDeviceId);
+      const fatimaBinding = createDeviceBinding(fatimaId, fatimaDeviceId);
+      const keyPackage = Buffer.alloc(64, 7).toString("base64");
+
+      const publishProtectedUser = await api(`/api/v1/chats/${chatId}/crypto/key-packages`, {
+        method: "POST",
+        token: aishaToken,
+        body: { ...aishaBinding, scope, keyPackage },
+      });
+      const publishAngel = await api(`/api/v1/chats/${chatId}/crypto/key-packages`, {
+        method: "POST",
+        token: fatimaToken,
+        body: { ...fatimaBinding, scope, keyPackage },
+      });
+      expect(publishProtectedUser.status).toBe(200);
+      expect(publishAngel.status).toBe(200);
+
+      const angelFetch = await api(
+        `/api/v1/chats/${chatId}/crypto/key-packages/${aishaId}?deviceId=${fatimaDeviceId}&scope=${encodeURIComponent(scope)}`,
+        { token: fatimaToken },
+      );
+      expect(angelFetch.status).toBe(200);
+      expect(angelFetch.body.keyPackage.userId).toBe(aishaId);
+
+      const otherParticipantFetch = await api(
+        `/api/v1/chats/${chatId}/crypto/key-packages/${aishaId}?deviceId=device_omar_whisper_0123&scope=${encodeURIComponent(scope)}`,
+        { token: omarToken },
+      );
+      expect(otherParticipantFetch.status).toBe(404);
+    });
+
     it("rejects unencoded Whispers and accepts the opaque MLS-tagged envelope shape", async () => {
       const plaintext = await api(`/api/v1/angel/chats/${chatId}/whispers`, {
         method: "POST",

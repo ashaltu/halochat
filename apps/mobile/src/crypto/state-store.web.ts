@@ -209,12 +209,12 @@ async function readState(userId: string, chatId: string, device: DeviceContext) 
   return { stored, localData };
 }
 
-export async function hasPublishedChatKeyPackage(userId: string, chatId: string) {
-  return (await readEntry<boolean>(keyPackageKey(userId, chatId))) === true;
+export async function hasPublishedChatKeyPackage(userId: string, chatId: string, scope = "PARTICIPANT") {
+  return (await readEntry<boolean>(keyPackageKey(userId, `${chatId}:${scope}`))) === true;
 }
 
-export async function markChatKeyPackagePublished(userId: string, chatId: string) {
-  await writeEntry(keyPackageKey(userId, chatId), true);
+export async function markChatKeyPackagePublished(userId: string, chatId: string, scope = "PARTICIPANT") {
+  await writeEntry(keyPackageKey(userId, `${chatId}:${scope}`), true);
 }
 
 export async function getTrustedChatSafetyCode(userId: string, chatId: string) {

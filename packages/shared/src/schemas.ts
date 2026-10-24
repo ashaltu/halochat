@@ -131,6 +131,7 @@ export const SendMessageSchema = z.object({
 
 export const PublishChatKeyPackageSchema = z.object({
   deviceId: z.string().min(20).max(80),
+  scope: z.string().min(1).max(200).regex(/^(?:PARTICIPANT|WHISPER:[^:\s]{1,80}:[^:\s]{1,80})$/).optional(),
   identity: z.string().min(8).max(256).regex(BASE64_BYTES),
   signatureKey: z.string().min(40).max(128).regex(BASE64_BYTES),
   signatureProof: z.string().min(80).max(128).regex(BASE64_BYTES),
