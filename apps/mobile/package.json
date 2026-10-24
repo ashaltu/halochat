@@ -3,6 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "license": "BSD-3-Clause",
+  "author": {
+    "name": "Abduselam Shaltu",
+    "url": "https://github.com/ashaltu"
+  },
   "main": "expo-router/entry",
   "scripts": {
     "build": "tsc --noEmit",

@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "license": "BSD-3-Clause",
+  "author": {
+    "name": "Abduselam Shaltu",
+    "url": "https://github.com/ashaltu"
+  },
   "main": "src/index",
   "react-native": "src/index.ts",
   "browser": "src/index.web.ts",

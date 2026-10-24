@@ -3,6 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "license": "BSD-3-Clause",
+  "author": {
+    "name": "Abduselam Shaltu",
+    "url": "https://github.com/ashaltu"
+  },
   "packageManager": "pnpm@10.6.5",
   "scripts": {
     "build": "pnpm --filter \"@halochat/*\" run build",
