@@ -1,5 +1,6 @@
 use super::{ExpectedMember, GroupCommitResult};
 use std::fmt::{Display, Formatter};
+use zeroize::Zeroizing;
 
 #[derive(Debug, uniffi::Error)]
 pub enum E2eeError {
@@ -62,6 +63,8 @@ pub fn e2ee_protect_state(
     device_key: Vec<u8>,
     context: Vec<u8>,
 ) -> Result<Vec<u8>, E2eeError> {
+    let state = Zeroizing::new(state);
+    let device_key = Zeroizing::new(device_key);
     super::protect_state(&state, &device_key, &context).map_err(Into::into)
 }
 
@@ -71,16 +74,19 @@ pub fn e2ee_unprotect_state(
     device_key: Vec<u8>,
     context: Vec<u8>,
 ) -> Result<Vec<u8>, E2eeError> {
+    let device_key = Zeroizing::new(device_key);
     super::unprotect_state(&envelope, &device_key, &context).map_err(Into::into)
 }
 
 #[uniffi::export]
 pub fn e2ee_device_identity(state: Vec<u8>) -> Result<ExpectedMember, E2eeError> {
+    let state = Zeroizing::new(state);
     super::device_identity(&state).map_err(Into::into)
 }
 
 #[uniffi::export]
 pub fn e2ee_group_members(state: Vec<u8>) -> Result<Vec<ExpectedMember>, E2eeError> {
+    let state = Zeroizing::new(state);
     super::group_members(&state).map_err(Into::into)
 }
 
@@ -92,6 +98,7 @@ pub fn e2ee_create_device(identity: Vec<u8>) -> Result<DeviceResult, E2eeError> 
 
 #[uniffi::export]
 pub fn e2ee_create_group(state: Vec<u8>, group_id: Vec<u8>) -> Result<Vec<u8>, E2eeError> {
+    let state = Zeroizing::new(state);
     super::create_group(&state, &group_id).map_err(Into::into)
 }
 
@@ -101,6 +108,7 @@ pub fn e2ee_add_member(
     key_package: Vec<u8>,
     expected_member: ExpectedMember,
 ) -> Result<AddMemberResult, E2eeError> {
+    let state = Zeroizing::new(state);
     let result = super::add_member(&state, &key_package, &expected_member)?;
     Ok(AddMemberResult {
         state: result.state,
@@ -115,11 +123,13 @@ pub fn e2ee_process_commit(
     commit: Vec<u8>,
     expected_members: Vec<ExpectedMember>,
 ) -> Result<Vec<u8>, E2eeError> {
+    let state = Zeroizing::new(state);
     super::process_commit(&state, &commit, &expected_members).map_err(Into::into)
 }
 
 #[uniffi::export]
 pub fn e2ee_remove_member(state: Vec<u8>, leaf_index: u32) -> Result<CommitResult, E2eeError> {
+    let state = Zeroizing::new(state);
     super::remove_member(&state, leaf_index)
         .map(Into::into)
         .map_err(Into::into)
@@ -127,6 +137,7 @@ pub fn e2ee_remove_member(state: Vec<u8>, leaf_index: u32) -> Result<CommitResul
 
 #[uniffi::export]
 pub fn e2ee_join_group(state: Vec<u8>, welcome: Vec<u8>) -> Result<Vec<u8>, E2eeError> {
+    let state = Zeroizing::new(state);
     super::join_group(&state, &welcome).map_err(Into::into)
 }
 
@@ -135,6 +146,8 @@ pub fn e2ee_encrypt_application(
     state: Vec<u8>,
     plaintext: Vec<u8>,
 ) -> Result<ApplicationResult, E2eeError> {
+    let state = Zeroizing::new(state);
+    let plaintext = Zeroizing::new(plaintext);
     let (state, message) = super::encrypt_application(&state, &plaintext)?;
     Ok(ApplicationResult { state, message })
 }
@@ -144,6 +157,7 @@ pub fn e2ee_decrypt_application(
     state: Vec<u8>,
     message: Vec<u8>,
 ) -> Result<ApplicationResult, E2eeError> {
+    let state = Zeroizing::new(state);
     let (state, message) = super::decrypt_application(&state, &message)?;
     Ok(ApplicationResult { state, message })
 }
