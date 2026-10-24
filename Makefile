@@ -1,4 +1,4 @@
-.PHONY: all install build test e2ee-test e2ee-native-check e2ee-mobile-check e2ee-native-libs e2ee-bindings e2ee-wasm-check e2ee-wasm-test e2ee-wasm-web e2ee-wasm-browser-assets e2ee-wasm-browser-test e2ee-android-module-check e2ee-ios-module-check e2ee-platform-module-check test-e2e dev-server dev-support dev-mobile mobile-web-build clean check rust-check
+.PHONY: all install build test e2ee-test e2ee-native-check e2ee-mobile-check e2ee-native-libs e2ee-bindings e2ee-ios-runtime-test e2ee-wasm-check e2ee-wasm-test e2ee-wasm-web e2ee-wasm-browser-assets e2ee-wasm-browser-test e2ee-android-module-check e2ee-ios-module-check e2ee-platform-module-check test-e2e dev-server dev-support dev-mobile mobile-web-build clean check rust-check
 
 WASM_BINDGEN ?= wasm-bindgen
 CARGO_ENV ?= CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_RELEASE_DEBUG=0
@@ -32,6 +32,9 @@ e2ee-bindings:
 	swiftc -module-cache-path packages/e2ee-core/target/swift-module-cache -Xcc -fmodule-map-file=packages/e2ee-core/target/uniffi/swift/halochat_e2ee_coreFFI.modulemap -I packages/e2ee-core/target/uniffi/swift -L packages/e2ee-core/target/debug -lhalochat_e2ee_core packages/e2ee-core/target/uniffi/swift/halochat_e2ee_core.swift -emit-module -module-name halochat_e2ee_core -emit-module-path packages/e2ee-core/target/uniffi/swift/halochat_e2ee_core.swiftmodule
 	swiftc -module-cache-path packages/e2ee-core/target/swift-module-cache -Xcc -fmodule-map-file=packages/e2ee-core/target/uniffi/swift/halochat_e2ee_coreFFI.modulemap -I packages/e2ee-core/target/uniffi/swift -L packages/e2ee-core/target/debug -lhalochat_e2ee_core -Xlinker -rpath -Xlinker $(CURDIR)/packages/e2ee-core/target/debug packages/e2ee-core/target/uniffi/swift/halochat_e2ee_core.swift packages/e2ee-core/tests/swift-roundtrip.swift -o packages/e2ee-core/target/swift-roundtrip
 	packages/e2ee-core/target/swift-roundtrip
+
+e2ee-ios-runtime-test:
+	bash packages/e2ee-core/scripts/test-ios-runtime.sh
 
 e2ee-mobile-check:
 	$(CARGO_ENV) cargo check --locked --manifest-path packages/e2ee-core/Cargo.toml --features native-bindings --target aarch64-apple-ios
