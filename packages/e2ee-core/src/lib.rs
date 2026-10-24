@@ -21,8 +21,13 @@ use std::collections::HashMap;
 use tls_codec::{Deserialize as TlsDeserialize, Serialize as TlsSerialize};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
+#[cfg(feature = "native-bindings")]
+mod ffi;
 #[cfg(target_arch = "wasm32")]
 mod wasm;
+
+#[cfg(feature = "native-bindings")]
+uniffi::setup_scaffolding!();
 
 const SUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
 const STATE_VERSION: u32 = 1;
@@ -42,6 +47,7 @@ pub struct GroupCommitResult {
     pub commit: Vec<u8>,
 }
 
+#[cfg_attr(feature = "native-bindings", derive(uniffi::Record))]
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ExpectedMember {
     pub identity: Vec<u8>,

@@ -7,6 +7,10 @@ publish = false
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+native-bindings = ["dep:uniffi"]
+binding-generation = ["native-bindings", "uniffi/cli"]
+
 [dependencies]
 aes-gcm = { version = "=0.10.3", features = ["zeroize"] }
 openmls = { version = "=0.9.1", features = ["js"] }
@@ -17,6 +21,12 @@ serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.154"
 tls_codec = "=0.5.0"
 zeroize = { version = "=1.9.1", features = ["derive"] }
+uniffi = { version = "=0.32.2", optional = true }
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "uniffi-bindgen.rs"
+required-features = ["binding-generation"]
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "=0.2.17", features = ["js"] }
