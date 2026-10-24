@@ -16,6 +16,23 @@ async function installWasmRoutes(page: import("@playwright/test").Page) {
   }));
 }
 
+async function installWebStoreHarness(page: import("@playwright/test").Page) {
+  await page.route(`${smokePath}index.html`, (route) => route.fulfill({
+    contentType: "text/html",
+    body: `<!doctype html><body><script type="module" src="./e2ee-web-store-entry.js"></script></body>`,
+  }));
+  await page.route(`${smokePath}e2ee-web-store-entry.js`, (route) => route.fulfill({
+    path: storeBundle,
+    contentType: "text/javascript",
+  }));
+  await installWasmRoutes(page);
+  await page.route("http://127.0.0.1:4173/halochat_e2ee_core_bg.wasm", (route) => route.fulfill({
+    path: resolve(wasmOutput, "halochat_e2ee_core_bg.wasm"),
+    contentType: "application/wasm",
+  }));
+  await page.goto(`${smokePath}index.html`);
+}
+
 test("browser WASM creates an MLS group and encrypts/decrypts a message", async ({ page }) => {
   await page.route(`${smokePath}index.html`, (route) => route.fulfill({
     contentType: "text/html",
@@ -143,4 +160,219 @@ test("web adapter encrypts and persists MLS state across reloads", async ({ page
   expect(result.plaintext).toBe("persisted browser MLS message");
   expect(result.localCache).toBe("persisted browser MLS message");
   expect(result.sameSafetyCode).toBe(true);
+});
+
+test("two browser devices establish MLS through the backend and exchange encrypted messages", async ({ browser, page, request }) => {
+  const suffix = Date.now().toString();
+  const signUp = async (prefix: string, sex: "MALE" | "FEMALE") => {
+    const response = await request.post("http://127.0.0.1:3000/api/auth/sign-up/email", {
+      data: {
+        email: `${prefix}-${suffix}@example.com`,
+        username: `${prefix}_${suffix}`,
+        displayName: prefix.toUpperCase(),
+        password: "password123",
+        dateOfBirth: "1995-01-01",
+        sex,
+      },
+    });
+    expect(response.status(), await response.text()).toBe(201);
+    return response.json();
+  };
+  const requester = await signUp("wca", "MALE");
+  const recipient = await signUp("wcb", "FEMALE");
+  const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
+
+  const contactResponse = await request.post("http://127.0.0.1:3000/api/v1/requests", {
+    headers: auth(requester.session.token),
+    data: { recipientId: recipient.user.id, purpose: "Social / personal" },
+  });
+  expect(contactResponse.status(), await contactResponse.text()).toBe(201);
+  const contact = await contactResponse.json();
+  const accepted = await request.post(`http://127.0.0.1:3000/api/v1/requests/${contact.requestId}/accept`, {
+    headers: auth(recipient.session.token),
+  });
+  expect(accepted.status(), await accepted.text()).toBe(200);
+
+  const listedChats = await request.get("http://127.0.0.1:3000/api/v1/chats", {
+    headers: auth(requester.session.token),
+  });
+  const { chats } = await listedChats.json();
+  const chatId = chats[0].id as string;
+
+  const recipientContext = await browser.newContext();
+  const recipientPage = await recipientContext.newPage();
+  await Promise.all([installWebStoreHarness(page), installWebStoreHarness(recipientPage)]);
+
+  const prepareDevice = (targetPage: import("@playwright/test").Page, userId: string) => targetPage.evaluate(async (userId) => {
+    const api = window as typeof window & {
+      E2eeWeb: any;
+      initializeE2eeDevice(userId: string): Promise<{ deviceId: string }>;
+      loadE2eeStateRecord(userId: string, scope: string): Promise<any>;
+      saveE2eeState(userId: string, scope: string, state: any, localData?: any): Promise<void>;
+    };
+    const encoder = new TextEncoder();
+    const device = await api.initializeE2eeDevice(userId);
+    const state = (await api.loadE2eeStateRecord(userId, "device"))!.state;
+    const member = await api.E2eeWeb.deviceIdentity(state);
+    const keyPackage = await api.E2eeWeb.createKeyPackage(state);
+    const proof = await api.E2eeWeb.signDeviceBinding(keyPackage.state, encoder.encode(userId), encoder.encode(device.deviceId));
+    await api.saveE2eeState(userId, "device", keyPackage.state);
+    const b64 = (value: Uint8Array) => btoa(String.fromCharCode(...value));
+    return {
+      userId,
+      deviceId: device.deviceId,
+      identity: b64(member.identity),
+      signatureKey: b64(member.signatureKey),
+      signatureProof: b64(proof),
+      keyPackage: b64(keyPackage.keyPackage),
+    };
+  }, userId);
+  const devices = await Promise.all([
+    prepareDevice(page, requester.user.id),
+    prepareDevice(recipientPage, recipient.user.id),
+  ]);
+
+  for (const [index, user] of [requester, recipient].entries()) {
+    const response = await request.post(`http://127.0.0.1:3000/api/v1/chats/${chatId}/crypto/key-packages`, {
+      headers: auth(user.session.token),
+      data: { ...devices[index], scope: "PARTICIPANT" },
+    });
+    expect(response.status(), await response.text()).toBe(200);
+  }
+
+  const claimedPackageResponse = await request.get(
+    `http://127.0.0.1:3000/api/v1/chats/${chatId}/crypto/key-packages/${recipient.user.id}?deviceId=${encodeURIComponent(devices[0].deviceId)}`,
+    { headers: auth(requester.session.token) },
+  );
+  expect(claimedPackageResponse.status(), await claimedPackageResponse.text()).toBe(200);
+  const claimedPackage = (await claimedPackageResponse.json()).keyPackage;
+  const welcome = await page.evaluate(async ({ requesterId, recipientId, chatId, peer }) => {
+    const api = window as typeof window & {
+      E2eeWeb: any;
+      loadE2eeStateRecord(userId: string, scope: string): Promise<any>;
+      saveE2eeState(userId: string, scope: string, state: any, localData?: any): Promise<void>;
+      getE2eeContext(userId: string, scope: string): Promise<Uint8Array>;
+    };
+    const bytes = (value: string) => Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
+    const requesterState = (await api.loadE2eeStateRecord(requesterId, "device"))!.state;
+    const expectedIdentity = new TextEncoder().encode(`halochat:user:${recipientId}:device:${peer.deviceId}`);
+    const peerIdentity = bytes(peer.identity);
+    const peerSignatureKey = bytes(peer.signatureKey);
+    if (String(peerIdentity) !== String(expectedIdentity) || !await api.E2eeWeb.verifyDeviceBinding(
+      new TextEncoder().encode(recipientId),
+      new TextEncoder().encode(peer.deviceId),
+      peerIdentity,
+      peerSignatureKey,
+      bytes(peer.signatureProof),
+    )) throw new Error("Recipient device proof failed verification");
+
+    const context = await api.getE2eeContext(requesterId, chatId);
+    const group = await api.E2eeWeb.createGroup(requesterState, new TextEncoder().encode(`halochat:chat:${chatId}`), context);
+    const added = await api.E2eeWeb.addMember(group, bytes(peer.keyPackage), {
+      identity: peerIdentity,
+      signatureKey: peerSignatureKey,
+    });
+    await api.saveE2eeState(requesterId, chatId, added.state, {
+      lastSeq: 0,
+      pendingMessages: [],
+      plaintextByMessageId: {},
+    });
+    return {
+      ciphertext: btoa(String.fromCharCode(...added.welcome)),
+      commit: btoa(String.fromCharCode(...added.commit)),
+    };
+  }, { requesterId: requester.user.id, recipientId: recipient.user.id, chatId, peer: claimedPackage });
+
+  const welcomeClientMsgId = `web-welcome-${suffix}`;
+  const welcomeResponse = await request.post(`http://127.0.0.1:3000/api/v1/chats/${chatId}/messages`, {
+    headers: auth(requester.session.token),
+    data: {
+      clientMsgId: welcomeClientMsgId,
+      ciphertext: welcome.ciphertext,
+      encryptionMetadata: {
+        protocol: "MLS",
+        version: 1,
+        kind: "welcome",
+        keyPackageId: claimedPackage.keyPackageId,
+        claimantDeviceId: devices[0].deviceId,
+        commit: welcome.commit,
+      },
+    },
+  });
+  expect(welcomeResponse.status(), await welcomeResponse.text()).toBe(201);
+  const welcomeMessage = (await welcomeResponse.json()).message;
+
+  const recipientJoin = await recipientPage.evaluate(async ({ requesterId, recipientId, chatId, welcome, requesterDevice }) => {
+    const api = window as typeof window & {
+      E2eeWeb: any;
+      initializeE2eeDevice(userId: string): Promise<{ deviceId: string }>;
+      loadE2eeStateRecord(userId: string, scope: string): Promise<any>;
+      saveE2eeState(userId: string, scope: string, state: any, localData?: any): Promise<void>;
+      getE2eeContext(userId: string, scope: string): Promise<Uint8Array>;
+    };
+    const ciphertext = Uint8Array.from(atob(welcome.ciphertext), (character) => character.charCodeAt(0));
+    const deviceState = (await api.loadE2eeStateRecord(recipientId, "device"))!.state;
+    const context = await api.getE2eeContext(recipientId, chatId);
+    const group = await api.E2eeWeb.joinGroup(deviceState, ciphertext, context);
+    const members = await api.E2eeWeb.groupMembers(group);
+    const ownDevice = await api.initializeE2eeDevice(recipientId);
+    const expected = [
+      `halochat:user:${requesterId}:device:${requesterDevice}`,
+      `halochat:user:${recipientId}:device:${ownDevice.deviceId}`,
+    ].map((identity) => btoa(identity));
+    const roster = members.map((member: { identity: Uint8Array }) => btoa(String.fromCharCode(...member.identity)));
+    if (members.length !== 2 || expected.some((identity) => !roster.includes(identity))) {
+      throw new Error("Joined MLS roster did not match the two expected chat devices");
+    }
+    await api.saveE2eeState(recipientId, chatId, group, {
+      lastSeq: welcome.seq,
+      pendingMessages: [],
+      plaintextByMessageId: {},
+    });
+    return { roster };
+  }, {
+    requesterId: requester.user.id,
+    recipientId: recipient.user.id,
+    chatId,
+    welcome: { ciphertext: welcome.ciphertext, seq: welcomeMessage.seq },
+    requesterDevice: devices[0].deviceId,
+  });
+  expect(recipientJoin.roster).toHaveLength(2);
+
+  const sent = await recipientPage.evaluate(async ({ recipientId, chatId, text }) => {
+    const api = window as typeof window & {
+      E2eeWeb: any;
+      loadE2eeStateRecord(userId: string, scope: string): Promise<any>;
+      saveE2eeState(userId: string, scope: string, state: any, localData?: any): Promise<void>;
+    };
+    const record = await api.loadE2eeStateRecord(recipientId, chatId);
+    const encrypted = await api.E2eeWeb.encryptApplication(record.state, new TextEncoder().encode(text));
+    await api.saveE2eeState(recipientId, chatId, encrypted.state);
+    return btoa(String.fromCharCode(...encrypted.message));
+  }, { recipientId: recipient.user.id, chatId, text: "browser recipient to requester" });
+  expect(sent).not.toContain("browser recipient to requester");
+
+  const sentResponse = await request.post(`http://127.0.0.1:3000/api/v1/chats/${chatId}/messages`, {
+    headers: auth(recipient.session.token),
+    data: { ciphertext: sent, encryptionMetadata: { protocol: "MLS", version: 1, kind: "application" } },
+  });
+  expect(sentResponse.status(), await sentResponse.text()).toBe(201);
+  const storedMessage = (await sentResponse.json()).message;
+  expect(storedMessage.ciphertext).toBe(sent);
+  expect(storedMessage.ciphertext).not.toContain("browser recipient to requester");
+
+  const decrypted = await page.evaluate(async ({ requesterId, chatId, ciphertext }) => {
+    const api = window as typeof window & {
+      E2eeWeb: any;
+      loadE2eeStateRecord(userId: string, scope: string): Promise<any>;
+      saveE2eeState(userId: string, scope: string, state: any, localData?: any): Promise<void>;
+    };
+    const record = await api.loadE2eeStateRecord(requesterId, chatId);
+    const message = Uint8Array.from(atob(ciphertext), (character) => character.charCodeAt(0));
+    const opened = await api.E2eeWeb.decryptApplication(record.state, message);
+    await api.saveE2eeState(requesterId, chatId, opened.state);
+    return new TextDecoder().decode(opened.message);
+  }, { requesterId: requester.user.id, chatId, ciphertext: storedMessage.ciphertext });
+  expect(decrypted).toBe("browser recipient to requester");
+  await recipientPage.close();
 });
