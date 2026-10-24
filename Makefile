@@ -25,6 +25,8 @@ e2ee-bindings:
 	cd packages/e2ee-core && cargo run --locked --features binding-generation --bin uniffi-bindgen -- generate --no-format --library target/debug/libhalochat_e2ee_core.dylib --language swift --out-dir target/uniffi/swift
 	cd packages/e2ee-core && cargo run --locked --features binding-generation --bin uniffi-bindgen -- generate --no-format --library target/debug/libhalochat_e2ee_core.dylib --language kotlin --out-dir target/uniffi/kotlin
 	swiftc -module-cache-path packages/e2ee-core/target/swift-module-cache -Xcc -fmodule-map-file=packages/e2ee-core/target/uniffi/swift/halochat_e2ee_coreFFI.modulemap -I packages/e2ee-core/target/uniffi/swift -L packages/e2ee-core/target/debug -lhalochat_e2ee_core packages/e2ee-core/target/uniffi/swift/halochat_e2ee_core.swift -emit-module -module-name halochat_e2ee_core -emit-module-path packages/e2ee-core/target/uniffi/swift/halochat_e2ee_core.swiftmodule
+	swiftc -module-cache-path packages/e2ee-core/target/swift-module-cache -Xcc -fmodule-map-file=packages/e2ee-core/target/uniffi/swift/halochat_e2ee_coreFFI.modulemap -I packages/e2ee-core/target/uniffi/swift -L packages/e2ee-core/target/debug -lhalochat_e2ee_core -Xlinker -rpath -Xlinker $(CURDIR)/packages/e2ee-core/target/debug packages/e2ee-core/target/uniffi/swift/halochat_e2ee_core.swift packages/e2ee-core/tests/swift-roundtrip.swift -o packages/e2ee-core/target/swift-roundtrip
+	packages/e2ee-core/target/swift-roundtrip
 
 e2ee-mobile-check:
 	cargo check --locked --manifest-path packages/e2ee-core/Cargo.toml --features native-bindings --target aarch64-apple-ios
