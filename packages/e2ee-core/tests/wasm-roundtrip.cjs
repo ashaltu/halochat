@@ -12,6 +12,7 @@ const {
   processCommit,
   protectState,
   removeMember,
+  safetyFingerprint,
   unprotectState,
 } = require("../target/wasm-node/halochat_e2ee_core.js");
 
@@ -44,6 +45,7 @@ aliceState = unprotectState(protectedState, storageKey, stateContext);
 const added = addMember(aliceState, bob.keyPackage, memberJson(deviceIdentity(bob.state)));
 aliceState = added.state;
 let bobState = joinGroup(bob.state, added.welcome);
+assert.deepEqual(Buffer.from(safetyFingerprint(aliceState)), Buffer.from(safetyFingerprint(bobState)));
 
 const charlie = createDevice(Buffer.from("charlie/device-1"));
 const mallory = createDevice(Buffer.from("mallory/device-1"));

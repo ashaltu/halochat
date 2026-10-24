@@ -20,7 +20,10 @@ import {
   ensureChatE2ee,
   encryptAndSendChatMessage,
   fetchAndDecryptChatMessages,
+  getChatSafetyVerification,
+  markChatSafetyCodeVerified,
 } from "../../src/crypto/session.js";
+import { formatSafetyCode } from "../../src/crypto/safety-code.js";
 
 export default function ChatConversationScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -54,6 +57,20 @@ export default function ChatConversationScreen() {
     queryFn: () => ensureChatE2ee(user!.id, String(id), partnerId!, chat!.requesterUserId),
     enabled: !!user?.id && !!id && !!partnerId && !!chat?.requesterUserId,
     refetchInterval: (query) => query.state.data === "waiting" ? 3000 : false,
+  });
+
+  const safetyVerificationQuery = useQuery({
+    queryKey: ["e2ee-safety", id, user?.id],
+    queryFn: () => getChatSafetyVerification(user!.id, String(id)),
+    enabled: !!user?.id && e2eeQuery.data === "ready" && infoModalVisible,
+  });
+
+  const verifySafetyCodeMutation = useMutation({
+    mutationFn: () => {
+      if (!user?.id) throw new Error("Sign in to verify this conversation");
+      return markChatSafetyCodeVerified(user.id, String(id));
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["e2ee-safety", id, user?.id] }),
   });
 
   // Fetch Messages
@@ -353,6 +370,39 @@ export default function ChatConversationScreen() {
             </View>
 
             <ScrollView style={{ maxHeight: 400 }}>
+              <View style={styles.sheetSection}>
+                <Text style={styles.sheetSectionTitle}>Encryption identity</Text>
+                {safetyVerificationQuery.isLoading ? (
+                  <ActivityIndicator size="small" color={theme.colors.primary} />
+                ) : safetyVerificationQuery.data ? (
+                  <>
+                    <Text style={styles.safetyCode}>
+                      {formatSafetyCode(safetyVerificationQuery.data.safetyCode)}
+                    </Text>
+                    <Text style={styles.sheetMuted}>
+                      {safetyVerificationQuery.data.verified
+                        ? "Verified on this device."
+                        : safetyVerificationQuery.data.changed
+                          ? "This code changed. Verify it with your partner again."
+                          : "Not verified. Compare this code with your partner over a separate trusted channel."}
+                    </Text>
+                    {!safetyVerificationQuery.data.verified ? (
+                      <TouchableOpacity
+                        style={styles.safetyVerifyBtn}
+                        onPress={() => verifySafetyCodeMutation.mutate()}
+                        disabled={verifySafetyCodeMutation.isPending}
+                      >
+                        <Text style={styles.safetyVerifyText}>
+                          {verifySafetyCodeMutation.isPending ? "Saving…" : "I compared the code and it matches"}
+                        </Text>
+                      </TouchableOpacity>
+                    ) : null}
+                  </>
+                ) : (
+                  <Text style={styles.sheetMuted}>The encryption verification code is unavailable.</Text>
+                )}
+              </View>
+
               {/* Own Angels Status (D8) */}
               <View style={styles.sheetSection}>
                 <Text style={styles.sheetSectionTitle}>Your Assigned Angels</Text>
@@ -747,6 +797,27 @@ const styles = StyleSheet.create({
     color: theme.colors.textMuted,
     textTransform: "uppercase",
     marginBottom: 8,
+  },
+  safetyCode: {
+    color: theme.colors.text,
+    fontSize: 15,
+    fontWeight: "700",
+    letterSpacing: 0.6,
+    marginBottom: 8,
+  },
+  safetyVerifyBtn: {
+    backgroundColor: theme.colors.bg,
+    borderColor: theme.colors.primary,
+    borderWidth: 1,
+    padding: 10,
+    borderRadius: theme.radii.sm,
+    alignItems: "center",
+    marginTop: 10,
+  },
+  safetyVerifyText: {
+    color: theme.colors.primary,
+    fontWeight: "600",
+    fontSize: 13,
   },
   sheetMuted: {
     fontSize: 13,

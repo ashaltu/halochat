@@ -698,6 +698,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_halochat_e2ee_core_checksum_func_e2ee_remove_member(
     ): Int
+    external fun uniffi_halochat_e2ee_core_checksum_func_e2ee_safety_fingerprint(
+    ): Int
     external fun uniffi_halochat_e2ee_core_checksum_func_e2ee_unprotect_state(
     ): Int
     external fun ffi_halochat_e2ee_core_uniffi_contract_version(
@@ -738,6 +740,8 @@ internal object UniffiLib {
     external fun uniffi_halochat_e2ee_core_fn_func_e2ee_protect_state(`state`: RustBuffer.ByValue,`deviceKey`: RustBuffer.ByValue,`context`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
     external fun uniffi_halochat_e2ee_core_fn_func_e2ee_remove_member(`state`: RustBuffer.ByValue,`leafIndex`: Int,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    external fun uniffi_halochat_e2ee_core_fn_func_e2ee_safety_fingerprint(`state`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
     external fun uniffi_halochat_e2ee_core_fn_func_e2ee_unprotect_state(`envelope`: RustBuffer.ByValue,`deviceKey`: RustBuffer.ByValue,`context`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
@@ -894,6 +898,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_halochat_e2ee_core_checksum_func_e2ee_remove_member() and 0xFFFF) != 64103) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_halochat_e2ee_core_checksum_func_e2ee_safety_fingerprint() and 0xFFFF) != 353) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_halochat_e2ee_core_checksum_func_e2ee_unprotect_state() and 0xFFFF) != 24363) {
@@ -1563,6 +1570,18 @@ public object FfiConverterSequenceTypeExpectedMember: FfiConverterRustBuffer<Lis
 
         FfiConverterByteArray.lower(`state`),
         FfiConverterUInt.lower(`leafIndex`),_status)
+}
+    )
+    }
+
+
+    @Throws(E2eeException::class) fun `e2eeSafetyFingerprint`(`state`: kotlin.ByteArray): kotlin.ByteArray {
+            return FfiConverterByteArray.lift(
+    uniffiRustCallWithError(E2eeException) { _status ->
+    UniffiLib.uniffi_halochat_e2ee_core_fn_func_e2ee_safety_fingerprint(
+
+
+        FfiConverterByteArray.lower(`state`),_status)
 }
     )
     }

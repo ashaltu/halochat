@@ -47,6 +47,7 @@ type HaloChatE2eeNativeModule = {
   encryptApplication(state: E2eeState, plaintext: Uint8Array): Promise<E2eeApplication>;
   decryptApplication(state: E2eeState, message: Uint8Array): Promise<E2eeApplication>;
   groupMembers(state: E2eeState): Promise<E2eeMember[]>;
+  safetyFingerprint(state: E2eeState): Promise<Uint8Array>;
 };
 
 export default requireNativeModule<HaloChatE2eeNativeModule>('HaloChatE2ee');

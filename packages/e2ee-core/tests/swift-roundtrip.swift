@@ -13,6 +13,9 @@ struct SwiftRoundTrip {
             expectedMember: bobMember
         )
         let bobGroup = try e2eeJoinGroup(state: bob.state, welcome: added.welcome)
+        let aliceFingerprint = try e2eeSafetyFingerprint(state: added.state)
+        let bobFingerprint = try e2eeSafetyFingerprint(state: bobGroup)
+        precondition(aliceFingerprint == bobFingerprint)
         let sent = try e2eeEncryptApplication(state: added.state, plaintext: Data("Swift MLS message".utf8))
         let received = try e2eeDecryptApplication(state: bobGroup, message: sent.message)
 

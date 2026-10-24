@@ -17,6 +17,7 @@ use openmls_rust_crypto::OpenMlsRustCrypto;
 use openmls_rust_crypto::{MemoryStorage, RustCrypto};
 use openmls_traits::random::OpenMlsRand;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use tls_codec::{Deserialize as TlsDeserialize, Serialize as TlsSerialize};
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -312,6 +313,25 @@ pub fn group_members(state: &[u8]) -> Result<Vec<ExpectedMember>, String> {
     let (snapshot, provider) = decode_state(state)?;
     let (group, _) = load_group(&snapshot, &provider)?;
     expected_members_for_group(&group)
+}
+
+fn hash_fingerprint_field(hash: &mut Sha256, value: &[u8]) {
+    hash.update((value.len() as u64).to_be_bytes());
+    hash.update(value);
+}
+
+pub fn safety_fingerprint(state: &[u8]) -> Result<Vec<u8>, String> {
+    let (snapshot, provider) = decode_state(state)?;
+    let (group, _) = load_group(&snapshot, &provider)?;
+    let members = expected_members_for_group(&group)?;
+    let mut hash = Sha256::new();
+    hash.update(b"halochat:mls-safety-fingerprint:v1");
+    hash_fingerprint_field(&mut hash, group.group_id().as_slice());
+    for member in members {
+        hash_fingerprint_field(&mut hash, &member.identity);
+        hash_fingerprint_field(&mut hash, &member.signature_key);
+    }
+    Ok(hash.finalize().to_vec())
 }
 
 fn encode_message(message: &MlsMessageOut) -> Result<Vec<u8>, String> {
@@ -702,6 +722,29 @@ mod tests {
         assert!(bob_group
             .process_message(&bob_provider, protocol_message(after_removal))
             .is_err());
+    }
+
+    #[test]
+    fn safety_fingerprint_matches_group_members_and_detects_credential_changes() {
+        let (alice_device, _) = create_device(b"alice/device-1").unwrap();
+        let (bob_device, bob_key_package) = create_device(b"bob/device-1").unwrap();
+        let alice_group = create_group(&alice_device, b"safety-code-test").unwrap();
+        let bob_member = device_identity(&bob_device).unwrap();
+        let added = add_member(&alice_group, &bob_key_package, &bob_member).unwrap();
+        let bob_group = join_group(&bob_device, &added.welcome).unwrap();
+
+        assert_eq!(
+            safety_fingerprint(&added.state).unwrap(),
+            safety_fingerprint(&bob_group).unwrap()
+        );
+
+        let (mallory_device, mallory_key_package) = create_device(b"bob/device-1").unwrap();
+        let mallory_member = device_identity(&mallory_device).unwrap();
+        let substituted = add_member(&alice_group, &mallory_key_package, &mallory_member).unwrap();
+        assert_ne!(
+            safety_fingerprint(&added.state).unwrap(),
+            safety_fingerprint(&substituted.state).unwrap()
+        );
     }
 
     #[test]

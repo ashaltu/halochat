@@ -164,5 +164,8 @@ public class HaloChatE2eeModule: Module {
     AsyncFunction("groupMembers") { (input: [String: Data]) throws -> [[String: Data]] in
       try withState(input) { _, raw in try e2eeGroupMembers(state: raw).map(memberMap) }
     }
+    AsyncFunction("safetyFingerprint") { (input: [String: Data]) throws -> Data in
+      try withState(input) { _, raw in try e2eeSafetyFingerprint(state: raw) }
+    }
   }
 }

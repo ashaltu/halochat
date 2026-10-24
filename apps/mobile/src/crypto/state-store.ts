@@ -120,6 +120,10 @@ function keyPackagePublishedKey(userId: string, chatId: string) {
   return `halochat.e2ee.key-package.${safeFilePart(userId)}.${safeFilePart(chatId)}`;
 }
 
+function safetyCodeKey(userId: string, chatId: string) {
+  return `halochat.e2ee.safety-code.${safeFilePart(userId)}.${safeFilePart(chatId)}`;
+}
+
 function localDataContext(userId: string, deviceId: string, chatId: string) {
   return contextFor(userId, deviceId, `local-cache:${chatId}`);
 }
@@ -185,6 +189,14 @@ export async function hasPublishedChatKeyPackage(userId: string, chatId: string)
 
 export async function markChatKeyPackagePublished(userId: string, chatId: string) {
   await SecureStore.setItemAsync(keyPackagePublishedKey(userId, chatId), "1", secureStoreOptions());
+}
+
+export async function getTrustedChatSafetyCode(userId: string, chatId: string) {
+  return SecureStore.getItemAsync(safetyCodeKey(userId, chatId));
+}
+
+export async function trustChatSafetyCode(userId: string, chatId: string, safetyCode: string) {
+  await SecureStore.setItemAsync(safetyCodeKey(userId, chatId), safetyCode, secureStoreOptions());
 }
 
 export async function initializeE2eeDevice(userId: string) {

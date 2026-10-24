@@ -67,6 +67,11 @@ pub fn group_members(state: Vec<u8>) -> Result<JsValue, JsValue> {
     Ok(result.into())
 }
 
+#[wasm_bindgen(js_name = safetyFingerprint)]
+pub fn safety_fingerprint(state: Vec<u8>) -> Result<Vec<u8>, JsValue> {
+    super::safety_fingerprint(&state).map_err(to_js_error)
+}
+
 #[wasm_bindgen(js_name = createDevice)]
 pub fn create_device(identity: Vec<u8>) -> Result<JsValue, JsValue> {
     let (state, key_package) = super::create_device(&identity).map_err(to_js_error)?;

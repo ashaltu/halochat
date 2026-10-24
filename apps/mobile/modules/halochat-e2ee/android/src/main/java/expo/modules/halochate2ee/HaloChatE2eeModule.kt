@@ -143,5 +143,8 @@ class HaloChatE2eeModule : Module() {
     AsyncFunction("groupMembers") { input: Map<String, ByteArray> ->
       withState(input) { _, raw -> e2eeGroupMembers(raw).map { it.asMap() } }
     }
+    AsyncFunction("safetyFingerprint") { input: Map<String, ByteArray> ->
+      withState(input) { _, raw -> e2eeSafetyFingerprint(raw) }
+    }
   }
 }

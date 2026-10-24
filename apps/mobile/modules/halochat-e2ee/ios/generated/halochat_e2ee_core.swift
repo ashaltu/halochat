@@ -1076,6 +1076,14 @@ public func e2eeRemoveMember(state: Data, leafIndex: UInt32)throws  -> CommitRes
     )
 })
 }
+public func e2eeSafetyFingerprint(state: Data)throws  -> Data  {
+    return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeE2eeError_lift) {
+        uniffiCallStatus in
+    uniffi_halochat_e2ee_core_fn_func_e2ee_safety_fingerprint(
+        FfiConverterData.lower(state),uniffiCallStatus
+    )
+})
+}
 public func e2eeUnprotectState(envelope: Data, deviceKey: Data, context: Data)throws  -> Data  {
     return try  FfiConverterData.lift(try rustCallWithError(FfiConverterTypeE2eeError_lift) {
         uniffiCallStatus in
@@ -1136,6 +1144,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_halochat_e2ee_core_checksum_func_e2ee_remove_member() != 64103) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_halochat_e2ee_core_checksum_func_e2ee_safety_fingerprint() != 353) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_halochat_e2ee_core_checksum_func_e2ee_unprotect_state() != 24363) {

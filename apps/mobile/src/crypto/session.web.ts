@@ -13,3 +13,11 @@ export async function encryptAndSendChatMessage(): Promise<never> {
 export async function fetchAndDecryptChatMessages(): Promise<never[]> {
   return unavailable();
 }
+
+export async function getChatSafetyVerification(): Promise<never> {
+  return unavailable();
+}
+
+export async function markChatSafetyCodeVerified(): Promise<never> {
+  return unavailable();
+}

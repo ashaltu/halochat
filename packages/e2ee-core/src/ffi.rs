@@ -97,6 +97,12 @@ pub fn e2ee_group_members(state: Vec<u8>) -> Result<Vec<ExpectedMember>, E2eeErr
 }
 
 #[uniffi::export]
+pub fn e2ee_safety_fingerprint(state: Vec<u8>) -> Result<Vec<u8>, E2eeError> {
+    let state = Zeroizing::new(state);
+    super::safety_fingerprint(&state).map_err(Into::into)
+}
+
+#[uniffi::export]
 pub fn e2ee_create_device(identity: Vec<u8>) -> Result<DeviceResult, E2eeError> {
     let (state, key_package) = super::create_device(&identity)?;
     Ok(DeviceResult { state, key_package })

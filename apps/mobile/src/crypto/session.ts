@@ -1,14 +1,17 @@
 import base64 from "base64-js";
 import E2eeNative, { type E2eeMember } from "@halochat/e2ee-native";
 import { apiRequest } from "../api/client.js";
+import { encodeSafetyCode, getSafetyCodeStatus } from "./safety-code.js";
 import {
   hasPublishedChatKeyPackage,
   getE2eeContext,
+  getTrustedChatSafetyCode,
   initializeE2eeDevice,
   loadE2eeState,
   loadE2eeStateRecord,
   markChatKeyPackagePublished,
   saveE2eeState,
+  trustChatSafetyCode,
   type E2eeLocalData,
   type E2eePendingMessage,
 } from "./state-store.js";
@@ -317,4 +320,21 @@ export async function fetchAndDecryptChatMessages(userId: string, chatId: string
     if (page.length === 100) after = page[page.length - 1].seq;
   } while (page.length === 100);
   return decryptChatMessages(userId, chatId, messages);
+}
+
+export async function getChatSafetyCode(userId: string, chatId: string) {
+  const record = await loadE2eeStateRecord(userId, chatId);
+  if (!record) throw new Error("Chat encryption has not been established yet");
+  const fingerprint = await E2eeNative.safetyFingerprint(record.state);
+  return encodeSafetyCode(fingerprint);
+}
+
+export async function getChatSafetyVerification(userId: string, chatId: string) {
+  const safetyCode = await getChatSafetyCode(userId, chatId);
+  const trustedCode = await getTrustedChatSafetyCode(userId, chatId);
+  return { safetyCode, ...getSafetyCodeStatus(safetyCode, trustedCode) };
+}
+
+export async function markChatSafetyCodeVerified(userId: string, chatId: string) {
+  await trustChatSafetyCode(userId, chatId, await getChatSafetyCode(userId, chatId));
 }
