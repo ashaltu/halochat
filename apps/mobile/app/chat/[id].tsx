@@ -18,8 +18,10 @@ import { useAuthStore } from "../../src/stores/auth.js";
 import { useRealtimeStore } from "../../src/stores/realtime.js";
 import {
   ensureChatE2ee,
+  ensureWhisperGroup,
   encryptAndSendChatMessage,
   fetchAndDecryptChatMessages,
+  decryptWhisper,
   getChatSafetyVerification,
   markChatSafetyCodeVerified,
 } from "../../src/crypto/session.js";
@@ -33,7 +35,6 @@ export default function ChatConversationScreen() {
   const { subscribe } = useRealtimeStore();
 
   const [inputText, setInputText] = useState("");
-  const [whispers, setWhispers] = useState<any[]>([]);
   const [infoModalVisible, setInfoModalVisible] = useState(false);
   const [reportModalVisible, setReportModalVisible] = useState(false);
   const [reportReason, setReportReason] = useState("");
@@ -57,6 +58,17 @@ export default function ChatConversationScreen() {
     queryFn: () => ensureChatE2ee(user!.id, String(id), partnerId!, chat!.requesterUserId),
     enabled: !!user?.id && !!id && !!partnerId && !!chat?.requesterUserId,
     refetchInterval: (query) => query.state.data === "waiting" ? 3000 : false,
+  });
+
+  useQuery({
+    queryKey: ["whisper-group-setup", id, user?.id, chat?.ownAngels?.map((angel: any) => angel.id).join(",")],
+    queryFn: async () => {
+      if (!user?.id || !Array.isArray(chat?.ownAngels)) return [];
+      return Promise.all(chat.ownAngels.map((angel: any) =>
+        ensureWhisperGroup(user.id, String(id), user.id, angel.angelUserId, angel.id)
+      ));
+    },
+    enabled: !!user?.id && e2eeQuery.data === "ready" && !!chat?.ownAngels?.length,
   });
 
   const safetyVerificationQuery = useQuery({
@@ -90,6 +102,22 @@ export default function ChatConversationScreen() {
     refetchInterval: 3000,
   });
 
+  const { data: whisperData } = useQuery({
+    queryKey: ["whispers", id, user?.id],
+    queryFn: async () => {
+      if (!user?.id) return { whispers: [] };
+      const response = await apiRequest<{ whispers: any[] }>(`/api/v1/chats/${id}/whispers`);
+      const decrypted = [];
+      for (const whisper of response.whispers) {
+        const plaintext = await decryptWhisper(user.id, String(id), user.id, whisper.angelUserId, whisper);
+        if (plaintext !== null) decrypted.push({ ...whisper, plaintext });
+      }
+      return { whispers: decrypted };
+    },
+    enabled: !!user?.id && !!chat && e2eeQuery.data === "ready",
+    refetchInterval: 3000,
+  });
+
   // Fetch user's angels for "Invite Angel" action
   const { data: protectionData } = useQuery({
     queryKey: ["my-protection"],
@@ -106,7 +134,7 @@ export default function ChatConversationScreen() {
 
     const unsubWhisper = subscribe("whisper.new", (payload) => {
       if (payload.whisper?.chatId === id) {
-        setWhispers((prev) => [...prev, payload.whisper]);
+        queryClient.invalidateQueries({ queryKey: ["whispers", id, user?.id] });
       }
     });
 
@@ -121,7 +149,7 @@ export default function ChatConversationScreen() {
       unsubWhisper();
       unsubChat();
     };
-  }, [id]);
+  }, [id, user?.id]);
 
   // Mutations
   const sendMessageMutation = useMutation({
@@ -217,7 +245,7 @@ export default function ChatConversationScreen() {
   // Combine messages & whispers sorted
   const combinedItems = [
     ...messages.map((m) => ({ ...m, isWhisper: false })),
-    ...whispers.map((w) => ({ ...w, isWhisper: true })),
+    ...(whisperData?.whispers ?? []).map((w) => ({ ...w, isWhisper: true })),
   ].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
   return (
@@ -289,7 +317,7 @@ export default function ChatConversationScreen() {
               return (
                 <View style={styles.whisperBubble}>
                   <Text style={styles.whisperHeader}>✨ Private Angel Whisper</Text>
-                  <Text style={styles.whisperText}>Whisper encryption is not ready on this device.</Text>
+                  <Text style={styles.whisperText}>{item.plaintext}</Text>
                   <Text style={styles.whisperTime}>
                     {new Date(item.createdAt).toLocaleTimeString([], {
                       hour: "2-digit",

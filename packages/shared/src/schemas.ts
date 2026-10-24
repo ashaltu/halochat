@@ -131,7 +131,7 @@ export const SendMessageSchema = z.object({
 
 export const PublishChatKeyPackageSchema = z.object({
   deviceId: z.string().min(20).max(80),
-  scope: z.string().min(1).max(200).regex(/^(?:PARTICIPANT|WHISPER:[^:\s]{1,80}:[^:\s]{1,80})$/).optional(),
+  scope: z.string().min(1).max(240).regex(/^(?:PARTICIPANT|WHISPER:[^:\s]{1,80}:[^:\s]{1,80}:[^:\s]{1,80})$/).optional(),
   identity: z.string().min(8).max(256).regex(BASE64_BYTES),
   signatureKey: z.string().min(40).max(128).regex(BASE64_BYTES),
   signatureProof: z.string().min(80).max(128).regex(BASE64_BYTES),
@@ -139,13 +139,24 @@ export const PublishChatKeyPackageSchema = z.object({
 });
 
 export const SendWhisperSchema = z.object({
+  clientMsgId: z.string().min(16).max(80).optional(),
   ciphertext: z.string().min(1).regex(BASE64_BYTES),
   encryptionMetadata: z.object({
     protocol: z.literal("MLS"),
     version: z.literal(1),
     kind: z.literal("whisper"),
+    mlsContentType: z.enum(["welcome", "application"]),
+    keyPackageId: z.string().min(1).max(120).optional(),
+    claimantDeviceId: z.string().min(20).max(80).optional(),
+    accessId: z.string().min(1).max(120),
   }).passthrough(),
   plaintextCharLength: z.number().int().min(0).max(50, "Whispers are limited to 50 characters"),
+}).superRefine((whisper, context) => {
+  if (whisper.encryptionMetadata.mlsContentType === "welcome" && (
+    !whisper.clientMsgId || !whisper.encryptionMetadata.keyPackageId || !whisper.encryptionMetadata.claimantDeviceId || !whisper.encryptionMetadata.accessId
+  )) {
+    context.addIssue({ code: "custom", path: ["encryptionMetadata"], message: "Welcome messages need a claimed KeyPackage and idempotency key" });
+  }
 });
 
 export const ChatAccessRequestSchema = z.object({

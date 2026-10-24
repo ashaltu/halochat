@@ -16,6 +16,7 @@ export type E2eePendingMessage = {
   ciphertext: string;
   encryptionMetadata: Record<string, unknown>;
   plaintext?: string;
+  plaintextCharLength?: number;
 };
 
 export type E2eeLocalData = {
@@ -184,11 +185,11 @@ async function readStateFile(userId: string, chatId: string, device: DeviceConte
 }
 
 export async function hasPublishedChatKeyPackage(userId: string, chatId: string, scope = "PARTICIPANT") {
-  return (await SecureStore.getItemAsync(keyPackagePublishedKey(userId, `${chatId}:${scope}`))) === "1";
+  return (await SecureStore.getItemAsync(keyPackagePublishedKey(userId, `${chatId}:${scope}:proof-v1`))) === "1";
 }
 
 export async function markChatKeyPackagePublished(userId: string, chatId: string, scope = "PARTICIPANT") {
-  await SecureStore.setItemAsync(keyPackagePublishedKey(userId, `${chatId}:${scope}`), "1", secureStoreOptions());
+  await SecureStore.setItemAsync(keyPackagePublishedKey(userId, `${chatId}:${scope}:proof-v1`), "1", secureStoreOptions());
 }
 
 export async function getTrustedChatSafetyCode(userId: string, chatId: string) {

@@ -201,6 +201,7 @@ export const cryptoKeyPackages = pgTable("crypto_key_package", {
   scope: text("scope").notNull().default("PARTICIPANT"),
   identity: text("identity").notNull(),
   signatureKey: text("signature_key").notNull(),
+  signatureProof: text("signature_proof"),
   keyPackage: text("key_package").notNull(),
   claimedByDeviceId: text("claimed_by_device_id"),
   consumedAt: timestamp("consumed_at"),

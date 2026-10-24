@@ -481,6 +481,30 @@ fileprivate struct FfiConverterUInt32: FfiConverterPrimitive {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterBool : FfiConverter {
+    typealias FfiType = Int8
+    typealias SwiftType = Bool
+
+    public static func lift(_ value: Int8) throws -> Bool {
+        return value != 0
+    }
+
+    public static func lower(_ value: Bool) -> Int8 {
+        return value ? 1 : 0
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Bool {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: Bool, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterString: FfiConverter {
     typealias SwiftType = String
     typealias FfiType = RustBuffer
@@ -1104,6 +1128,18 @@ public func e2eeUnprotectState(envelope: Data, deviceKey: Data, context: Data)th
     )
 })
 }
+public func e2eeVerifyDeviceBinding(accountId: Data, deviceId: Data, identity: Data, signatureKey: Data, signatureProof: Data) -> Bool  {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_halochat_e2ee_core_fn_func_e2ee_verify_device_binding(
+        FfiConverterData.lower(accountId),
+        FfiConverterData.lower(deviceId),
+        FfiConverterData.lower(identity),
+        FfiConverterData.lower(signatureKey),
+        FfiConverterData.lower(signatureProof),uniffiCallStatus
+    )
+})
+}
 
 private enum InitializationResult {
     case ok
@@ -1163,6 +1199,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_halochat_e2ee_core_checksum_func_e2ee_unprotect_state() != 24363) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_halochat_e2ee_core_checksum_func_e2ee_verify_device_binding() != 19013) {
         return InitializationResult.apiChecksumMismatch
     }
 

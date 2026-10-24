@@ -435,6 +435,7 @@ describe("HaloChat MVP Integration Tests", () => {
           userId: aishaId,
           deviceId: aishaDeviceId,
           signatureKey: aishaBinding.signatureKey,
+        signatureProof: aishaBinding.signatureProof,
           keyPackage,
         });
         const rejected = await api(`/api/v1/chats/${chatId}/crypto/key-packages/${aishaId}?deviceId=device_other_0123456789`, { token: omarToken });
@@ -548,14 +549,18 @@ describe("HaloChat MVP Integration Tests", () => {
 
   describe("5. Angel Protective Controls: Whisper & Send Restriction (D13, §8.5)", () => {
     let chatId: string;
+    let accessId: string;
+    let scope: string;
 
     beforeAll(async () => {
       const res = await api("/api/v1/chats", { token: aishaToken });
       chatId = res.body.chats[0].id;
+      const detail = await api(`/api/v1/chats/${chatId}`, { token: aishaToken });
+      accessId = detail.body.chat.ownAngels.find((item: { angelUserId: string }) => item.angelUserId === fatimaId).id;
+      scope = `WHISPER:${aishaId}:${fatimaId}:${accessId}`;
     });
 
     it("scopes Whisper KeyPackages to the protected user and their authorized Angel", async () => {
-      const scope = `WHISPER:${aishaId}:${fatimaId}`;
       const aishaDeviceId = "device_aisha_whisper_0123";
       const fatimaDeviceId = "device_fatima_whisper_0123";
       const aishaBinding = createDeviceBinding(aishaId, aishaDeviceId);
@@ -575,6 +580,18 @@ describe("HaloChat MVP Integration Tests", () => {
       expect(publishProtectedUser.status).toBe(200);
       expect(publishAngel.status).toBe(200);
 
+      const devices = await api(
+        `/api/v1/chats/${chatId}/crypto/devices/${fatimaId}?scope=${encodeURIComponent(scope)}`,
+        { token: aishaToken },
+      );
+      expect(devices.status).toBe(200);
+      expect(devices.body.devices).toContainEqual(expect.objectContaining({
+        deviceId: fatimaDeviceId,
+        identity: fatimaBinding.identity,
+        signatureKey: fatimaBinding.signatureKey,
+        signatureProof: fatimaBinding.signatureProof,
+      }));
+
       const angelFetch = await api(
         `/api/v1/chats/${chatId}/crypto/key-packages/${aishaId}?deviceId=${fatimaDeviceId}&scope=${encodeURIComponent(scope)}`,
         { token: fatimaToken },
@@ -587,6 +604,70 @@ describe("HaloChat MVP Integration Tests", () => {
         { token: omarToken },
       );
       expect(otherParticipantFetch.status).toBe(404);
+    });
+
+    it("consumes the scoped KeyPackage with its idempotent MLS Welcome Whisper", async () => {
+      const protectedDeviceId = "device_aisha_welcome_0123";
+      const angelDeviceId = "device_fatima_welcome_0123";
+      const binding = createDeviceBinding(aishaId, protectedDeviceId);
+      const keyPackage = Buffer.alloc(64, 8).toString("base64");
+      await api(`/api/v1/chats/${chatId}/crypto/key-packages`, {
+        method: "POST",
+        token: aishaToken,
+        body: { ...binding, scope, keyPackage },
+      });
+      const claimed = await api(
+        `/api/v1/chats/${chatId}/crypto/key-packages/${aishaId}?deviceId=${angelDeviceId}&scope=${encodeURIComponent(scope)}`,
+        { token: fatimaToken },
+      );
+      expect(claimed.status).toBe(200);
+
+      const welcome = {
+        clientMsgId: "whisper-welcome-id-0001",
+        ciphertext: Buffer.alloc(64, 3).toString("base64"),
+        encryptionMetadata: {
+          protocol: "MLS",
+          version: 1,
+          kind: "whisper",
+          mlsContentType: "welcome",
+          keyPackageId: claimed.body.keyPackage.keyPackageId,
+          claimantDeviceId: angelDeviceId,
+          accessId,
+        },
+        plaintextCharLength: 0,
+      };
+      const wrongPeriod = await api(`/api/v1/angel/chats/${chatId}/whispers`, {
+        method: "POST",
+        token: fatimaToken,
+        body: {
+          ...welcome,
+          clientMsgId: "whisper-welcome-wrong-period",
+          encryptionMetadata: { ...welcome.encryptionMetadata, accessId: "stale-access-period" },
+        },
+      });
+      expect(wrongPeriod.status).toBe(409);
+      expect(wrongPeriod.body.code).toBe("WHISPER_ACCESS_PERIOD_INVALID");
+
+      const first = await api(`/api/v1/angel/chats/${chatId}/whispers`, {
+        method: "POST",
+        token: fatimaToken,
+        body: welcome,
+      });
+      const retry = await api(`/api/v1/angel/chats/${chatId}/whispers`, {
+        method: "POST",
+        token: fatimaToken,
+        body: welcome,
+      });
+      expect(first.status).toBe(201);
+      expect(retry.status).toBe(200);
+
+      const replay = await api(`/api/v1/angel/chats/${chatId}/whispers`, {
+        method: "POST",
+        token: fatimaToken,
+        body: { ...welcome, clientMsgId: "whisper-welcome-id-0002" },
+      });
+      expect(replay.status).toBe(409);
+      expect(replay.body.code).toBe("KEY_PACKAGE_CLAIM_INVALID");
     });
 
     it("rejects unencoded Whispers and accepts the opaque MLS-tagged envelope shape", async () => {
@@ -602,12 +683,26 @@ describe("HaloChat MVP Integration Tests", () => {
         token: fatimaToken,
         body: {
           ...opaqueTransportFixture("whisper", "whisper"),
+          encryptionMetadata: {
+            protocol: "MLS",
+            version: 1,
+            kind: "whisper",
+            mlsContentType: "application",
+            accessId,
+          },
           plaintextCharLength: 30,
         },
       });
 
       expect(res.status).toBe(201);
       expect(res.body.whisper.toUserId).toBe(aishaId);
+
+      const protectedHistory = await api(`/api/v1/chats/${chatId}/whispers`, { token: aishaToken });
+      const otherParticipantHistory = await api(`/api/v1/chats/${chatId}/whispers`, { token: omarToken });
+      expect(protectedHistory.status).toBe(200);
+      expect(protectedHistory.body.whispers.length).toBeGreaterThan(0);
+      expect(protectedHistory.body.whispers.every((whisper: { toUserId: string }) => whisper.toUserId === aishaId)).toBe(true);
+      expect(otherParticipantHistory.body.whispers).toEqual([]);
     });
 
     it("Fatima pauses Aisha's sending ability", async () => {
@@ -655,10 +750,13 @@ describe("HaloChat MVP Integration Tests", () => {
   describe("6. Leave, Rejoin, and History Gaps (D6, D7, §8.6)", () => {
     let chatId: string;
     let accessRequestId: string;
+    let oldAccessId: string;
 
     beforeAll(async () => {
       const res = await api("/api/v1/chats", { token: aishaToken });
       chatId = res.body.chats[0].id;
+      const detail = await api(`/api/v1/chats/${chatId}`, { token: aishaToken });
+      oldAccessId = detail.body.chat.ownAngels.find((item: { angelUserId: string }) => item.angelUserId === fatimaId).id;
     });
 
     it("Aisha sends 'I'm Comfortable' leave request to Fatima", async () => {
@@ -685,6 +783,16 @@ describe("HaloChat MVP Integration Tests", () => {
 
       const chatRes = await api(`/api/v1/chats/${chatId}`, { token: aishaToken });
       expect(chatRes.body.chat.mode).toBe("COMFORT");
+      const staleKeyPackage = await api(
+        `/api/v1/chats/${chatId}/crypto/key-packages/${aishaId}?deviceId=device_fatima_whisper_0123&scope=${encodeURIComponent(`WHISPER:${aishaId}:${fatimaId}:${oldAccessId}`)}`,
+        { token: fatimaToken },
+      );
+      expect(staleKeyPackage.status).toBe(404);
+      const historicalDevices = await api(
+        `/api/v1/chats/${chatId}/crypto/devices/${fatimaId}?scope=${encodeURIComponent(`WHISPER:${aishaId}:${fatimaId}:${oldAccessId}`)}`,
+        { token: aishaToken },
+      );
+      expect(historicalDevices.status).toBe(200);
     });
 
     it("Messages sent while Fatima is absent are masked by history gap upon rejoin (D6)", async () => {

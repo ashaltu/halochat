@@ -13,13 +13,18 @@ import {
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "../../src/api/client.js";
 import { theme } from "../../src/theme.js";
+import { useAuthStore } from "../../src/stores/auth.js";
+import { encryptAndSendWhisper } from "../../src/crypto/session.js";
 
 export default function AngelTabScreen() {
   const queryClient = useQueryClient();
+  const { user } = useAuthStore();
 
   // Whisper modal state
   const [whisperModalVisible, setWhisperModalVisible] = useState(false);
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
+  const [selectedProtectedUserId, setSelectedProtectedUserId] = useState<string | null>(null);
+  const [selectedAccessId, setSelectedAccessId] = useState<string | null>(null);
   const [whisperText, setWhisperText] = useState("");
   const [whisperError, setWhisperError] = useState<string | null>(null);
 
@@ -94,7 +99,17 @@ export default function AngelTabScreen() {
 
   const sendWhisper = useMutation({
     mutationFn: async () => {
-      throw new Error("Encrypted Whisper support is not ready on this device.");
+      if (!user?.id || !selectedChatId || !selectedProtectedUserId || !selectedAccessId) {
+        throw new Error("Whisper conversation is unavailable");
+      }
+      return encryptAndSendWhisper(
+        user.id,
+        selectedChatId,
+        selectedProtectedUserId,
+        user.id,
+        selectedAccessId,
+        whisperText,
+      );
     },
     onSuccess: () => {
       setWhisperModalVisible(false);
@@ -280,6 +295,8 @@ export default function AngelTabScreen() {
                   style={styles.controlBtn}
                   onPress={() => {
                     setSelectedChatId(c.chatId);
+                    setSelectedProtectedUserId(c.protectedUserId);
+                    setSelectedAccessId(c.accessId);
                     setWhisperText("");
                     setWhisperError(null);
                     setWhisperModalVisible(true);
@@ -330,7 +347,7 @@ export default function AngelTabScreen() {
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Send Private Whisper</Text>
             <Text style={styles.cardSub}>
-              Encrypted Whispers are not available yet. The message will not be sent until private encryption is ready.
+              Whispers are end-to-end encrypted for you and your protected person for this access period.
             </Text>
             <Text style={styles.modalSub}>
               Only visible to your protected person. The other participant and other Angels cannot see it.
@@ -356,7 +373,7 @@ export default function AngelTabScreen() {
               <TouchableOpacity
                 style={[styles.btn, styles.acceptBtn]}
                 onPress={() => sendWhisper.mutate()}
-                disabled
+                disabled={sendWhisper.isPending || !whisperText.trim()}
               >
                 <Text style={styles.btnText}>Send Whisper</Text>
               </TouchableOpacity>

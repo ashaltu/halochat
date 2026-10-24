@@ -66,6 +66,23 @@ pub fn sign_device_binding(
     super::sign_device_binding(&state, &account_id, &device_id).map_err(to_js_error)
 }
 
+#[wasm_bindgen(js_name = verifyDeviceBinding)]
+pub fn verify_device_binding(
+    account_id: Vec<u8>,
+    device_id: Vec<u8>,
+    identity: Vec<u8>,
+    signature_key: Vec<u8>,
+    signature_proof: Vec<u8>,
+) -> bool {
+    super::verify_device_binding(
+        &account_id,
+        &device_id,
+        &identity,
+        &signature_key,
+        &signature_proof,
+    )
+}
+
 #[wasm_bindgen(js_name = groupMembers)]
 pub fn group_members(state: Vec<u8>) -> Result<JsValue, JsValue> {
     let members = super::group_members(&state).map_err(to_js_error)?;

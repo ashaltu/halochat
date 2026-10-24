@@ -15,6 +15,7 @@ const {
   removeMember,
   safetyFingerprint,
   signDeviceBinding,
+  verifyDeviceBinding,
   unprotectState,
 } = require("../target/wasm-node/halochat_e2ee_core.js");
 
@@ -60,6 +61,20 @@ assert.equal(verify(null, deviceBindingMessage(
   Buffer.from(boundMember.identity),
   Buffer.from(boundMember.signatureKey),
 ), bindingPublicKey, Buffer.from(bindingSignature)), true);
+assert.equal(verifyDeviceBinding(
+  Buffer.from("alice"),
+  boundDeviceId,
+  Buffer.from(boundMember.identity),
+  Buffer.from(boundMember.signatureKey),
+  Buffer.from(bindingSignature),
+), true);
+assert.equal(verifyDeviceBinding(
+  Buffer.from("mallory"),
+  boundDeviceId,
+  Buffer.from(boundMember.identity),
+  Buffer.from(boundMember.signatureKey),
+  Buffer.from(bindingSignature),
+), false);
 assert.throws(() => signDeviceBinding(boundDevice.state, Buffer.from("mallory"), boundDeviceId));
 const bob = createDevice(Buffer.from("bob/device-1"));
 const rotatedBobKeyPackage = createKeyPackage(bob.state);

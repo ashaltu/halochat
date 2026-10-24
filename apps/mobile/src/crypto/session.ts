@@ -32,7 +32,15 @@ type PublishedKeyPackage = {
   deviceId: string;
   identity: string;
   signatureKey: string;
+  signatureProof: string;
   keyPackage: string;
+};
+
+type PublishedDeviceIdentity = {
+  deviceId: string;
+  identity: string;
+  signatureKey: string;
+  signatureProof: string;
 };
 
 type ChatMessageResponse = { message: ServerMessage };
@@ -76,6 +84,22 @@ function isMlsMetadata(value: unknown): value is { protocol: "MLS"; version: 1; 
   return metadata.protocol === "MLS" && metadata.version === 1 && typeof metadata.kind === "string";
 }
 
+async function verifyPublishedDevices(userId: string, devices: PublishedDeviceIdentity[]) {
+  for (const device of devices) {
+    const identity = asciiBytes(`halochat:user:${userId}:device:${device.deviceId}`);
+    if (base64.fromByteArray(identity) !== device.identity || !device.signatureProof ||
+      !await E2eeNative.verifyDeviceBinding(
+        asciiBytes(userId),
+        asciiBytes(device.deviceId),
+        identity,
+        base64.toByteArray(device.signatureKey),
+        base64.toByteArray(device.signatureProof),
+      )) {
+      throw new Error("A device signing key is not bound to its account");
+    }
+  }
+}
+
 async function postPendingMessage(chatId: string, pending: E2eePendingMessage) {
   return apiRequest<ChatMessageResponse>(`/api/v1/chats/${chatId}/messages`, {
     method: "POST",
@@ -111,30 +135,32 @@ async function flushOutbox(userId: string, chatId: string) {
 }
 
 async function publishChatKeyPackage(userId: string, chatId: string, scope = "PARTICIPANT") {
-  const device = await initializeE2eeDevice(userId);
-  const deviceState = await loadE2eeState(userId, "device");
-  if (!deviceState) throw new Error("E2EE device state is unavailable");
+  return withChatLock(userId, "device-key-packages", async () => {
+    const device = await initializeE2eeDevice(userId);
+    const deviceState = await loadE2eeState(userId, "device");
+    if (!deviceState) throw new Error("E2EE device state is unavailable");
 
-  if (!(await hasPublishedChatKeyPackage(userId, chatId, scope))) {
-    const member = await E2eeNative.deviceIdentity(deviceState);
-    const created = await E2eeNative.createKeyPackage(deviceState);
-    const signatureProof = await E2eeNative.signDeviceBinding(created.state, asciiBytes(userId), asciiBytes(device.deviceId));
-    await saveE2eeState(userId, "device", created.state);
-    await apiRequest(`/api/v1/chats/${chatId}/crypto/key-packages`, {
-      method: "POST",
-      body: JSON.stringify({
-        deviceId: device.deviceId,
-        ...(scope === "PARTICIPANT" ? {} : { scope }),
-        identity: base64.fromByteArray(member.identity),
-        signatureKey: base64.fromByteArray(member.signatureKey),
-        signatureProof: base64.fromByteArray(signatureProof),
-        keyPackage: base64.fromByteArray(created.keyPackage),
-      }),
-    });
-    await markChatKeyPackagePublished(userId, chatId, scope);
-  }
+    if (!(await hasPublishedChatKeyPackage(userId, chatId, scope))) {
+      const member = await E2eeNative.deviceIdentity(deviceState);
+      const created = await E2eeNative.createKeyPackage(deviceState);
+      const signatureProof = await E2eeNative.signDeviceBinding(created.state, asciiBytes(userId), asciiBytes(device.deviceId));
+      await saveE2eeState(userId, "device", created.state);
+      await apiRequest(`/api/v1/chats/${chatId}/crypto/key-packages`, {
+        method: "POST",
+        body: JSON.stringify({
+          deviceId: device.deviceId,
+          ...(scope === "PARTICIPANT" ? {} : { scope }),
+          identity: base64.fromByteArray(member.identity),
+          signatureKey: base64.fromByteArray(member.signatureKey),
+          signatureProof: base64.fromByteArray(signatureProof),
+          keyPackage: base64.fromByteArray(created.keyPackage),
+        }),
+      });
+      await markChatKeyPackagePublished(userId, chatId, scope);
+    }
 
-  return loadE2eeState(userId, "device");
+    return loadE2eeState(userId, "device");
+  });
 }
 
 export async function ensureChatE2ee(
@@ -165,6 +191,26 @@ export async function ensureChatE2ee(
       );
       if (!invitation) return "waiting";
       const joined = await E2eeNative.joinGroup(deviceState, base64.toByteArray(invitation.ciphertext), context);
+      const localDevice = await initializeE2eeDevice(userId);
+      const localIdentity = await E2eeNative.deviceIdentity(deviceState);
+      const { devices } = await apiRequest<{ devices: PublishedDeviceIdentity[] }>(
+        `/api/v1/chats/${chatId}/crypto/devices/${requesterUserId}`,
+      );
+      await verifyPublishedDevices(requesterUserId, devices);
+      const members = await E2eeNative.groupMembers(joined);
+      const ownIdentity = asciiBytes(`halochat:user:${userId}:device:${localDevice.deviceId}`);
+      const hasLocalDevice = members.some((member) =>
+        base64.fromByteArray(member.identity) === base64.fromByteArray(ownIdentity) &&
+        base64.fromByteArray(member.identity) === base64.fromByteArray(localIdentity.identity) &&
+        base64.fromByteArray(member.signatureKey) === base64.fromByteArray(localIdentity.signatureKey)
+      );
+      const hasAuthorizedPeer = members.some((member) => devices.some((device) =>
+        base64.fromByteArray(member.identity) === device.identity &&
+        base64.fromByteArray(member.signatureKey) === device.signatureKey
+      ));
+      if (members.length !== 2 || !hasLocalDevice || !hasAuthorizedPeer) {
+        throw new Error("MLS Welcome has an unexpected device roster");
+      }
       await saveE2eeState(userId, chatId, joined, { ...EMPTY_DATA, lastSeq: invitation.seq });
       return "ready";
     }
@@ -185,6 +231,15 @@ export async function ensureChatE2ee(
     const identity = asciiBytes(expectedIdentity);
     if (base64.fromByteArray(identity) !== peer.identity || peer.userId !== partnerUserId) {
       throw new Error("The peer device identity does not match this chat participant");
+    }
+    if (!peer.signatureProof || !await E2eeNative.verifyDeviceBinding(
+      asciiBytes(peer.userId),
+      asciiBytes(peer.deviceId),
+      identity,
+      base64.toByteArray(peer.signatureKey),
+      base64.toByteArray(peer.signatureProof),
+    )) {
+      throw new Error("The peer device signing key is not bound to this account");
     }
     const expectedMember: E2eeMember = {
       identity,
@@ -211,6 +266,234 @@ export async function ensureChatE2ee(
     await flushOutbox(userId, chatId);
     const latest = await loadE2eeStateRecord(userId, chatId);
     return latest?.localData.pendingMessages.length ? "waiting" : "ready";
+  });
+}
+
+function whisperStateKey(chatId: string, angelUserId: string, accessId: string) {
+  return `whisper:${chatId}:${angelUserId}:${accessId}`;
+}
+
+function whisperScope(protectedUserId: string, angelUserId: string, accessId: string) {
+  return `WHISPER:${protectedUserId}:${angelUserId}:${accessId}`;
+}
+
+async function flushWhisperOutbox(userId: string, chatId: string, angelUserId: string, accessId: string) {
+  const stateKey = whisperStateKey(chatId, angelUserId, accessId);
+  let record = await loadE2eeStateRecord(userId, stateKey);
+  if (!record) return;
+
+  while (record.localData.pendingMessages.length > 0) {
+    const pending = record.localData.pendingMessages[0];
+    await apiRequest(`/api/v1/angel/chats/${chatId}/whispers`, {
+      method: "POST",
+      body: JSON.stringify({
+        clientMsgId: pending.clientMsgId,
+        ciphertext: pending.ciphertext,
+        encryptionMetadata: pending.encryptionMetadata,
+        plaintextCharLength: pending.plaintextCharLength ?? pending.plaintext?.length ?? 0,
+      }),
+    });
+    const localData: E2eeLocalData = { ...record.localData, pendingMessages: record.localData.pendingMessages.slice(1) };
+    await saveE2eeState(userId, stateKey, record.state, localData);
+    record = { ...record, localData };
+  }
+}
+
+export async function ensureWhisperGroup(
+  userId: string,
+  chatId: string,
+  protectedUserId: string,
+  angelUserId: string,
+  accessId: string,
+) {
+  if (userId !== protectedUserId && userId !== angelUserId) {
+    throw new Error("This device is not part of the private Whisper group");
+  }
+
+  const stateKey = whisperStateKey(chatId, angelUserId, accessId);
+  return withChatLock(userId, stateKey, async () => {
+    const scope = whisperScope(protectedUserId, angelUserId, accessId);
+    const device = await initializeE2eeDevice(userId);
+    const deviceState = await publishChatKeyPackage(userId, chatId, scope);
+    if (!deviceState) throw new Error("E2EE device state is unavailable");
+
+    const existing = await loadE2eeStateRecord(userId, stateKey);
+    if (existing) {
+      if (userId === angelUserId) await flushWhisperOutbox(userId, chatId, angelUserId, accessId);
+      return "ready" as const;
+    }
+    if (userId !== angelUserId) return "waiting" as const;
+
+    let peer: PublishedKeyPackage;
+    try {
+      const response = await apiRequest<{ keyPackage: PublishedKeyPackage }>(
+        `/api/v1/chats/${chatId}/crypto/key-packages/${protectedUserId}?deviceId=${encodeURIComponent(device.deviceId)}&scope=${encodeURIComponent(scope)}`,
+      );
+      peer = response.keyPackage;
+    } catch (error) {
+      if ((error as { code?: string }).code === "KEY_PACKAGE_UNAVAILABLE") return "waiting" as const;
+      throw error;
+    }
+
+    const expectedIdentity = `halochat:user:${protectedUserId}:device:${peer.deviceId}`;
+    const identity = asciiBytes(expectedIdentity);
+    if (peer.userId !== protectedUserId || base64.fromByteArray(identity) !== peer.identity) {
+      throw new Error("The protected person's device identity does not match this Whisper");
+    }
+    if (!peer.signatureProof || !await E2eeNative.verifyDeviceBinding(
+      asciiBytes(peer.userId),
+      asciiBytes(peer.deviceId),
+      identity,
+      base64.toByteArray(peer.signatureKey),
+      base64.toByteArray(peer.signatureProof),
+    )) {
+      throw new Error("The protected person's device signing key is not bound to this account");
+    }
+
+    const context = await getE2eeContext(userId, stateKey);
+    const group = await E2eeNative.createGroup(
+      deviceState,
+      asciiBytes(`halochat:whisper:${chatId}:${protectedUserId}:${angelUserId}:${accessId}`),
+      context,
+    );
+    const added = await E2eeNative.addMember(group, base64.toByteArray(peer.keyPackage), {
+      identity,
+      signatureKey: base64.toByteArray(peer.signatureKey),
+    });
+    const clientMsgId = base64.fromByteArray((await E2eeNative.generateDeviceKey()).subarray(0, 16));
+    const pending: E2eePendingMessage = {
+      clientMsgId,
+      ciphertext: base64.fromByteArray(added.welcome),
+      encryptionMetadata: {
+        protocol: "MLS",
+        version: 1,
+        kind: "whisper",
+        mlsContentType: "welcome",
+        keyPackageId: peer.keyPackageId,
+        claimantDeviceId: device.deviceId,
+        accessId,
+      },
+      plaintextCharLength: 0,
+    };
+    await saveE2eeState(userId, stateKey, added.state, {
+      ...EMPTY_DATA,
+      pendingMessages: [pending],
+    });
+    await flushWhisperOutbox(userId, chatId, angelUserId, accessId);
+    return "ready" as const;
+  });
+}
+
+export type WhisperEnvelope = {
+  id: string;
+  chatId: string;
+  angelUserId: string;
+  toUserId: string;
+  ciphertext: string;
+  encryptionMetadata: Record<string, unknown> | null;
+  createdAt: string;
+};
+
+export async function decryptWhisper(
+  userId: string,
+  chatId: string,
+  protectedUserId: string,
+  angelUserId: string,
+  whisper: WhisperEnvelope,
+) {
+  if ((userId !== protectedUserId && userId !== angelUserId) ||
+    whisper.toUserId !== protectedUserId || whisper.angelUserId !== angelUserId) {
+    throw new Error("This Whisper is not addressed to this private group");
+  }
+  const metadata = whisper.encryptionMetadata;
+  if (!metadata || metadata.protocol !== "MLS" || metadata.version !== 1 || metadata.kind !== "whisper") {
+    throw new Error("This Whisper does not contain a supported encrypted envelope");
+  }
+  if (typeof metadata.accessId !== "string") throw new Error("Whisper access period is missing");
+  const accessId = metadata.accessId;
+  const stateKey = whisperStateKey(chatId, angelUserId, accessId);
+  return withChatLock(userId, stateKey, async () => {
+    const record = await loadE2eeStateRecord(userId, stateKey);
+
+    if (metadata.mlsContentType === "welcome") {
+      if (record) return null;
+      const deviceState = await loadE2eeState(userId, "device");
+      if (!deviceState) throw new Error("E2EE device state is unavailable");
+      const context = await getE2eeContext(userId, stateKey);
+      const joined = await E2eeNative.joinGroup(deviceState, base64.toByteArray(whisper.ciphertext), context);
+      const expectedLocal = await E2eeNative.deviceIdentity(deviceState);
+      const { devices } = await apiRequest<{ devices: PublishedDeviceIdentity[] }>(
+        `/api/v1/chats/${chatId}/crypto/devices/${angelUserId}?scope=${encodeURIComponent(whisperScope(protectedUserId, angelUserId, accessId))}`,
+      );
+      await verifyPublishedDevices(angelUserId, devices);
+      const members = await E2eeNative.groupMembers(joined);
+      const hasLocalDevice = members.some((member) =>
+        base64.fromByteArray(member.identity) === base64.fromByteArray(expectedLocal.identity) &&
+        base64.fromByteArray(member.signatureKey) === base64.fromByteArray(expectedLocal.signatureKey)
+      );
+      const hasAuthorizedAngelDevice = members.some((member) => devices.some((device) =>
+        base64.fromByteArray(member.identity) === device.identity &&
+        base64.fromByteArray(member.signatureKey) === device.signatureKey &&
+        base64.fromByteArray(member.identity) === base64.fromByteArray(asciiBytes(`halochat:user:${angelUserId}:device:${device.deviceId}`))
+      ));
+      if (members.length !== 2 || !hasLocalDevice || !hasAuthorizedAngelDevice) {
+        throw new Error("Whisper MLS Welcome has an unexpected device roster");
+      }
+      await saveE2eeState(userId, stateKey, joined, {
+        ...EMPTY_DATA,
+        plaintextByMessageId: { [whisper.id]: "" },
+      });
+      return null;
+    }
+    if (metadata.mlsContentType !== "application") {
+      throw new Error("This Whisper uses an unsupported MLS content type");
+    }
+    if (!record) return null;
+    const cached = record.localData.plaintextByMessageId[whisper.id];
+    if (cached !== undefined) return cached;
+    if (userId === angelUserId) return null;
+    const decrypted = await E2eeNative.decryptApplication(record.state, base64.toByteArray(whisper.ciphertext));
+    const plaintext = utf8String(decrypted.message);
+    await saveE2eeState(userId, stateKey, decrypted.state, {
+      ...record.localData,
+      plaintextByMessageId: { ...record.localData.plaintextByMessageId, [whisper.id]: plaintext },
+    });
+    return plaintext;
+  });
+}
+
+export async function encryptAndSendWhisper(
+  userId: string,
+  chatId: string,
+  protectedUserId: string,
+  angelUserId: string,
+  accessId: string,
+  plaintext: string,
+) {
+  if (!plaintext.trim() || plaintext.length > 50) throw new Error("Whisper length is invalid");
+  const group = await ensureWhisperGroup(userId, chatId, protectedUserId, angelUserId, accessId);
+  if (group === "waiting") {
+    throw new Error("The protected person needs to open this chat before you can start the private Whisper");
+  }
+  const stateKey = whisperStateKey(chatId, angelUserId, accessId);
+  return withChatLock(userId, stateKey, async () => {
+    await flushWhisperOutbox(userId, chatId, angelUserId, accessId);
+    const record = await loadE2eeStateRecord(userId, stateKey);
+    if (!record) throw new Error("Private Whisper encryption is not ready");
+    const encrypted = await E2eeNative.encryptApplication(record.state, utf8Bytes(plaintext));
+    const pending: E2eePendingMessage = {
+      clientMsgId: base64.fromByteArray((await E2eeNative.generateDeviceKey()).subarray(0, 16)),
+      ciphertext: base64.fromByteArray(encrypted.message),
+      encryptionMetadata: { protocol: "MLS", version: 1, kind: "whisper", mlsContentType: "application", accessId },
+      plaintext,
+      plaintextCharLength: plaintext.length,
+    };
+    await saveE2eeState(userId, stateKey, encrypted.state, {
+      ...record.localData,
+      pendingMessages: [...record.localData.pendingMessages, pending],
+      plaintextByMessageId: { ...record.localData.plaintextByMessageId, [pending.clientMsgId]: plaintext },
+    });
+    await flushWhisperOutbox(userId, chatId, angelUserId, accessId);
   });
 }
 

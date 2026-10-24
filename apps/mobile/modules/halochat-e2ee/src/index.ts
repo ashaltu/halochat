@@ -40,6 +40,7 @@ type HaloChatE2eeNativeModule = {
   createKeyPackage(state: E2eeState): Promise<E2eeKeyPackage>;
   deviceIdentity(state: E2eeState): Promise<E2eeMember>;
   signDeviceBinding(state: E2eeState, accountId: Uint8Array, deviceId: Uint8Array): Promise<Uint8Array>;
+  verifyDeviceBinding(accountId: Uint8Array, deviceId: Uint8Array, identity: Uint8Array, signatureKey: Uint8Array, signatureProof: Uint8Array): Promise<boolean>;
   createGroup(state: E2eeState, groupId: Uint8Array, context: Uint8Array): Promise<E2eeState>;
   addMember(state: E2eeState, keyPackage: Uint8Array, expectedMember: E2eeMember): Promise<E2eeAddMember>;
   joinGroup(state: E2eeState, welcome: Uint8Array, context: Uint8Array): Promise<E2eeState>;

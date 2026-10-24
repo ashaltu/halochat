@@ -97,6 +97,9 @@ public class HaloChatE2eeModule: Module {
         try e2eeSignDeviceBinding(state: raw, accountId: accountId, deviceId: deviceId)
       }
     }
+    AsyncFunction("verifyDeviceBinding") { (accountId: Data, deviceId: Data, identity: Data, signatureKey: Data, signatureProof: Data) -> Bool in
+      e2eeVerifyDeviceBinding(accountId: accountId, deviceId: deviceId, identity: identity, signatureKey: signatureKey, signatureProof: signatureProof)
+    }
     AsyncFunction("createKeyPackage") { (input: [String: Data]) throws -> [String: Any] in
       try withState(input) { ref, raw in
         var result = try e2eeCreateKeyPackage(state: raw)

@@ -5,6 +5,8 @@ repo_root="$(cd "$(dirname "$0")/../../.." && pwd)"
 core_manifest="$repo_root/packages/e2ee-core/Cargo.toml"
 target_dir="$repo_root/packages/e2ee-core/target"
 module_dir="$repo_root/apps/mobile/modules/halochat-e2ee"
+native_stage="/private/tmp/halochat-e2ee-native"
+build_fingerprint="$(shasum -a 256 "$core_manifest" "$repo_root/packages/e2ee-core/Cargo.lock" "$repo_root/packages/e2ee-core/src/lib.rs" "$repo_root/packages/e2ee-core/src/ffi.rs" "$0" | shasum -a 256 | awk '{print $1}')"
 ndk_root="${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-${ANDROID_HOME:-}/ndk/27.1.12297006}}"
 
 if [[ ! -d "$ndk_root/toolchains/llvm/prebuilt/darwin-x86_64/bin" ]]; then
@@ -19,18 +21,52 @@ export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$ndk_bin/aarch64-linux-android
 export CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER="$ndk_bin/x86_64-linux-android24-clang"
 export CC_aarch64_linux_android="$CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER"
 export CC_x86_64_linux_android="$CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER"
+if [[ -d "$native_stage" ]] && {
+  [[ ! -f "$native_stage/.build-fingerprint" ]] ||
+    [[ "$(cat "$native_stage/.build-fingerprint")" != "$build_fingerprint" ]]
+}; then
+  rm -rf "$native_stage"
+fi
+mkdir -p "$native_stage"
+printf '%s\n' "$build_fingerprint" > "$native_stage/.build-fingerprint"
+ios_framework="$native_stage/halochat_e2ee_coreFFI.xcframework"
+device_framework="$native_stage/device/halochat_e2ee_coreFFI.framework"
+simulator_framework="$native_stage/simulator/halochat_e2ee_coreFFI.framework"
+simulator_arm64_lib="$native_stage/libhalochat_e2ee_simulator_arm64.a"
+simulator_x86_64_lib="$native_stage/libhalochat_e2ee_simulator_x86_64.a"
+simulator_lib="$native_stage/libhalochat_e2ee_simulator.a"
+mkdir -p "$device_framework/Headers" "$device_framework/Modules" "$simulator_framework/Headers" "$simulator_framework/Modules"
+if [[ ! -f "$native_stage/halochat_e2ee_coreFFI.h" ]]; then
+  cp "$module_dir/ios/generated/halochat_e2ee_coreFFI.h" "$native_stage/"
+fi
+
 ios_targets=(aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios)
-for target in "${ios_targets[@]}" aarch64-linux-android x86_64-linux-android; do
+for target in "${ios_targets[@]}"; do
+  case "$target" in
+    aarch64-apple-ios) output="$device_framework/halochat_e2ee_coreFFI" ;;
+    aarch64-apple-ios-sim) output="$simulator_arm64_lib" ;;
+    x86_64-apple-ios) output="$simulator_x86_64_lib" ;;
+  esac
+  if [[ -f "$output" ]]; then
+    continue
+  fi
   cargo build --locked --manifest-path "$core_manifest" --release --features native-bindings --target "$target"
+  case "$target" in
+    aarch64-apple-ios)
+      cp "$target_dir/$target/release/libhalochat_e2ee_core.a" "$device_framework/halochat_e2ee_coreFFI"
+      ;;
+    aarch64-apple-ios-sim)
+      cp "$target_dir/$target/release/libhalochat_e2ee_core.a" "$simulator_arm64_lib"
+      ;;
+    x86_64-apple-ios)
+      cp "$target_dir/$target/release/libhalochat_e2ee_core.a" "$simulator_x86_64_lib"
+      ;;
+  esac
+  cargo clean --manifest-path "$core_manifest" --target "$target"
 done
 
-ios_framework="$target_dir/native/halochat_e2ee_coreFFI.xcframework"
-simulator_lib="$target_dir/native/libhalochat_e2ee_simulator.a"
-device_framework="$target_dir/native/device/halochat_e2ee_coreFFI.framework"
-simulator_framework="$target_dir/native/simulator/halochat_e2ee_coreFFI.framework"
-mkdir -p "$target_dir/native" "$device_framework/Headers" "$device_framework/Modules" "$simulator_framework/Headers" "$simulator_framework/Modules"
-cp "$target_dir/uniffi/swift/halochat_e2ee_coreFFI.h" "$device_framework/Headers/"
-cp "$target_dir/uniffi/swift/halochat_e2ee_coreFFI.h" "$simulator_framework/Headers/"
+cp "$native_stage/halochat_e2ee_coreFFI.h" "$device_framework/Headers/"
+cp "$native_stage/halochat_e2ee_coreFFI.h" "$simulator_framework/Headers/"
 cat > "$device_framework/Modules/module.modulemap" <<'EOF'
 framework module halochat_e2ee_coreFFI {
   umbrella header "halochat_e2ee_coreFFI.h"
@@ -52,11 +88,7 @@ cat > "$device_framework/Info.plist" <<'EOF'
 </dict></plist>
 EOF
 cp "$device_framework/Info.plist" "$simulator_framework/Info.plist"
-lipo -create \
-  "$target_dir/x86_64-apple-ios/release/libhalochat_e2ee_core.a" \
-  "$target_dir/aarch64-apple-ios-sim/release/libhalochat_e2ee_core.a" \
-  -output "$simulator_lib"
-cp "$target_dir/aarch64-apple-ios/release/libhalochat_e2ee_core.a" "$device_framework/halochat_e2ee_coreFFI"
+lipo -create "$simulator_x86_64_lib" "$simulator_arm64_lib" -output "$simulator_lib"
 cp "$simulator_lib" "$simulator_framework/halochat_e2ee_coreFFI"
 rm -rf "$ios_framework"
 xcodebuild -create-xcframework \
@@ -66,8 +98,17 @@ xcodebuild -create-xcframework \
 cp -R "$ios_framework" "$module_dir/ios/"
 
 android_libs="$module_dir/android/src/main/jniLibs"
-mkdir -p "$android_libs/arm64-v8a" "$android_libs/x86_64"
-cp "$target_dir/aarch64-linux-android/release/libhalochat_e2ee_core.so" "$android_libs/arm64-v8a/"
-cp "$target_dir/x86_64-linux-android/release/libhalochat_e2ee_core.so" "$android_libs/x86_64/"
+for target in aarch64-linux-android x86_64-linux-android; do
+  cargo build --locked --manifest-path "$core_manifest" --release --features native-bindings --target "$target"
+  case "$target" in
+    aarch64-linux-android) android_abi=arm64-v8a ;;
+    x86_64-linux-android) android_abi=x86_64 ;;
+  esac
+  mkdir -p "$android_libs/$android_abi"
+  cp "$target_dir/$target/release/libhalochat_e2ee_core.so" "$android_libs/$android_abi/"
+  cargo clean --manifest-path "$core_manifest" --target "$target"
+done
+
+rm -rf "$native_stage"
 
 echo "Built iOS XCFramework and Android arm64/x86_64 libraries for the Expo module."

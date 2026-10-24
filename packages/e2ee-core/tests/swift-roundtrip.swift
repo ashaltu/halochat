@@ -3,6 +3,19 @@ import Foundation
 @main
 struct SwiftRoundTrip {
     static func main() throws {
+        let accountId = Data("swift-account".utf8)
+        let deviceId = Data("swift-device-123456".utf8)
+        let boundIdentity = Data("halochat:user:swift-account:device:swift-device-123456".utf8)
+        let boundDevice = try e2eeCreateDevice(identity: boundIdentity)
+        let boundMember = try e2eeDeviceIdentity(state: boundDevice.state)
+        let bindingProof = try e2eeSignDeviceBinding(state: boundDevice.state, accountId: accountId, deviceId: deviceId)
+        precondition(e2eeVerifyDeviceBinding(
+            accountId: accountId,
+            deviceId: deviceId,
+            identity: boundMember.identity,
+            signatureKey: boundMember.signatureKey,
+            signatureProof: bindingProof
+        ))
         let alice = try e2eeCreateDevice(identity: Data("alice/device-1".utf8))
         let bob = try e2eeCreateDevice(identity: Data("bob/device-1".utf8))
         let aliceGroup = try e2eeCreateGroup(state: alice.state, groupId: Data("swift-group".utf8))

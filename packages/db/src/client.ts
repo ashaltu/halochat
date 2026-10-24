@@ -175,6 +175,7 @@ export async function initDbSchema(db: DB) {
       "scope" text NOT NULL DEFAULT 'PARTICIPANT',
       "identity" text NOT NULL,
       "signature_key" text NOT NULL,
+      "signature_proof" text,
       "key_package" text NOT NULL,
       "claimed_by_device_id" text,
       "consumed_at" timestamp,
@@ -292,6 +293,7 @@ export async function initDbSchema(db: DB) {
     `CREATE UNIQUE INDEX IF NOT EXISTS "message_sender_client_id_unique" ON "message" ("sender_id", "client_msg_id");`,
     `CREATE UNIQUE INDEX IF NOT EXISTS "crypto_key_package_scope_device_unique" ON "crypto_key_package" ("chat_id", "user_id", "device_id", "scope");`,
     `ALTER TABLE "crypto_key_package" ADD COLUMN IF NOT EXISTS "claimed_by_device_id" text;`,
+    `ALTER TABLE "crypto_key_package" ADD COLUMN IF NOT EXISTS "signature_proof" text;`,
     `ALTER TABLE "crypto_key_package" ADD COLUMN IF NOT EXISTS "consumed_by_client_msg_id" text;`,
     `CREATE TABLE IF NOT EXISTS "push_token" (
       "id" text PRIMARY KEY,

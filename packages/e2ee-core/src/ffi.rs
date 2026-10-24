@@ -101,6 +101,23 @@ pub fn e2ee_sign_device_binding(
 }
 
 #[uniffi::export]
+pub fn e2ee_verify_device_binding(
+    account_id: Vec<u8>,
+    device_id: Vec<u8>,
+    identity: Vec<u8>,
+    signature_key: Vec<u8>,
+    signature_proof: Vec<u8>,
+) -> bool {
+    super::verify_device_binding(
+        &account_id,
+        &device_id,
+        &identity,
+        &signature_key,
+        &signature_proof,
+    )
+}
+
+#[uniffi::export]
 pub fn e2ee_group_members(state: Vec<u8>) -> Result<Vec<ExpectedMember>, E2eeError> {
     let state = Zeroizing::new(state);
     super::group_members(&state).map_err(Into::into)

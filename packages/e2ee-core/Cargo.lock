@@ -800,6 +800,7 @@ name = "halochat-e2ee-core"
 version = "0.1.0"
 dependencies = [
  "aes-gcm",
+ "ed25519-dalek",
  "getrandom 0.2.17",
  "js-sys",
  "openmls",

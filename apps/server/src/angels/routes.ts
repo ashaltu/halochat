@@ -11,6 +11,7 @@ import {
   chats,
   messages,
   whispers,
+  cryptoKeyPackages,
   chatAngelAccess,
   angelSendRestrictions,
   angelAccessRequests,
@@ -20,6 +21,7 @@ import {
   and,
   or,
   inArray,
+  asc,
   desc,
   isNull,
   gt,
@@ -48,6 +50,15 @@ import { AppEnv } from "../types.js";
 export const angelsRouter = new Hono<AppEnv>();
 
 angelsRouter.use("*", authMiddleware);
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const object = value as Record<string, unknown>;
+    return `{${Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(object[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
 
 type ScopeImpact = {
   chatId: string;
@@ -601,6 +612,7 @@ angelsRouter.get("/angel/dashboard", async (c) => {
   const activeChats = await db
     .select({
       chatId: chats.id,
+      accessId: chatAngelAccess.id,
       mode: chats.mode,
       status: chats.status,
       lastMessageAt: chats.lastMessageAt,
@@ -851,6 +863,25 @@ angelsRouter.get("/angel/chats/:id/messages", async (c) => {
   return c.json({ timeline });
 });
 
+angelsRouter.get("/angel/chats/:id/whispers", async (c) => {
+  const angel = c.get("user");
+  const chatId = c.req.param("id");
+  const db = await getDb();
+  const accessPeriods = await db.select({ id: chatAngelAccess.id })
+    .from(chatAngelAccess)
+    .where(and(
+      eq(chatAngelAccess.chatId, chatId),
+      eq(chatAngelAccess.angelUserId, angel.id),
+    )).limit(1);
+  if (!accessPeriods.length) {
+    return c.json({ code: "FORBIDDEN", message: "You have no authorized access to this chat" }, 403);
+  }
+  const whisperList = await db.select().from(whispers)
+    .where(and(eq(whispers.chatId, chatId), eq(whispers.angelUserId, angel.id)))
+    .orderBy(asc(whispers.createdAt));
+  return c.json({ whispers: whisperList });
+});
+
 angelsRouter.post("/angel/chats/:id/restrict-sending", async (c) => {
   const angel = c.get("user");
   const chatId = c.req.param("id");
@@ -1060,16 +1091,60 @@ angelsRouter.post("/angel/chats/:id/whispers", async (c) => {
   }
 
   const protectedUserId = accessRes[0].assignment.userId;
-  const whisperId = crypto.randomUUID();
+  const scope = `WHISPER:${protectedUserId}:${angel.id}:${accessRes[0].access.id}`;
+  if (parseResult.data.encryptionMetadata.accessId !== accessRes[0].access.id) {
+    return c.json({ code: "WHISPER_ACCESS_PERIOD_INVALID", message: "Whisper does not match the current access period" }, 409);
+  }
+  const whisperId = parseResult.data.clientMsgId ?? crypto.randomUUID();
+  const [existingWhisper] = await db.select().from(whispers).where(eq(whispers.id, whisperId)).limit(1);
+  if (existingWhisper) {
+    const sameRequest = existingWhisper.chatId === chatId &&
+      existingWhisper.angelUserId === angel.id &&
+      existingWhisper.toUserId === protectedUserId &&
+      existingWhisper.ciphertext === parseResult.data.ciphertext &&
+      canonicalJson(existingWhisper.encryptionMetadata) === canonicalJson(parseResult.data.encryptionMetadata);
+    if (!sameRequest) {
+      return c.json({ code: "CLIENT_MESSAGE_ID_REUSED", message: "Whisper ID was already used for different content" }, 409);
+    }
+    return c.json({ success: true, whisper: existingWhisper }, 200);
+  }
 
-  await db.insert(whispers).values({
+  if (parseResult.data.encryptionMetadata.mlsContentType === "welcome") {
+    const metadata = parseResult.data.encryptionMetadata;
+    const consumed = await db.update(cryptoKeyPackages).set({
+      consumedAt: new Date(),
+      consumedByClientMsgId: whisperId,
+    }).where(and(
+      eq(cryptoKeyPackages.id, metadata.keyPackageId!),
+      eq(cryptoKeyPackages.chatId, chatId),
+      eq(cryptoKeyPackages.userId, protectedUserId),
+      eq(cryptoKeyPackages.scope, scope),
+      eq(cryptoKeyPackages.claimedByDeviceId, metadata.claimantDeviceId!),
+      isNull(cryptoKeyPackages.consumedAt),
+    )).returning();
+    if (!consumed.length) {
+      const [retryWhisper] = await db.select().from(whispers).where(eq(whispers.id, whisperId)).limit(1);
+      if (!retryWhisper) {
+        return c.json({ code: "KEY_PACKAGE_CLAIM_INVALID", message: "Welcome does not match a package claimed by this device" }, 409);
+      }
+    }
+  }
+
+  const [insertedWhisper] = await db.insert(whispers).values({
     id: whisperId,
     chatId,
     angelUserId: angel.id,
     toUserId: protectedUserId,
     ciphertext: parseResult.data.ciphertext,
     encryptionMetadata: parseResult.data.encryptionMetadata || null,
-  });
+  }).onConflictDoNothing().returning();
+  if (!insertedWhisper) {
+    const [retryWhisper] = await db.select().from(whispers).where(eq(whispers.id, whisperId)).limit(1);
+    if (!retryWhisper || retryWhisper.chatId !== chatId || retryWhisper.angelUserId !== angel.id ||
+      retryWhisper.toUserId !== protectedUserId || retryWhisper.ciphertext !== parseResult.data.ciphertext) {
+      return c.json({ code: "CLIENT_MESSAGE_ID_REUSED", message: "Whisper ID was already used for different content" }, 409);
+    }
+  }
 
   const whisperData = {
     id: whisperId,

@@ -704,6 +704,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_halochat_e2ee_core_checksum_func_e2ee_unprotect_state(
     ): Int
+    external fun uniffi_halochat_e2ee_core_checksum_func_e2ee_verify_device_binding(
+    ): Int
     external fun ffi_halochat_e2ee_core_uniffi_contract_version(
     ): Int
 
@@ -749,6 +751,8 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_halochat_e2ee_core_fn_func_e2ee_unprotect_state(`envelope`: RustBuffer.ByValue,`deviceKey`: RustBuffer.ByValue,`context`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
+    external fun uniffi_halochat_e2ee_core_fn_func_e2ee_verify_device_binding(`accountId`: RustBuffer.ByValue,`deviceId`: RustBuffer.ByValue,`identity`: RustBuffer.ByValue,`signatureKey`: RustBuffer.ByValue,`signatureProof`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): Byte
     external fun ffi_halochat_e2ee_core_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
     external fun ffi_halochat_e2ee_core_rustbuffer_from_bytes(`bytes`: ForeignBytes.ByValue,uniffi_out_err: UniffiRustCallStatus,
@@ -913,6 +917,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_halochat_e2ee_core_checksum_func_e2ee_unprotect_state() and 0xFFFF) != 24363) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_halochat_e2ee_core_checksum_func_e2ee_verify_device_binding() and 0xFFFF) != 19013) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
 }
 
 /**
@@ -1026,6 +1033,29 @@ public object FfiConverterUInt: FfiConverter<UInt, Int> {
 
     override fun write(value: UInt, buf: ByteBuffer) {
         buf.putInt(value.toInt())
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterBoolean: FfiConverter<Boolean, Byte> {
+    override fun lift(value: Byte): Boolean {
+        return value.toInt() != 0
+    }
+
+    override fun read(buf: ByteBuffer): Boolean {
+        return lift(buf.get())
+    }
+
+    override fun lower(value: Boolean): Byte {
+        return if (value) 1.toByte() else 0.toByte()
+    }
+
+    override fun allocationSize(value: Boolean) = 1UL
+
+    override fun write(value: Boolean, buf: ByteBuffer) {
+        buf.put(lower(value))
     }
 }
 
@@ -1617,6 +1647,21 @@ public object FfiConverterSequenceTypeExpectedMember: FfiConverterRustBuffer<Lis
         FfiConverterByteArray.lower(`envelope`),
         FfiConverterByteArray.lower(`deviceKey`),
         FfiConverterByteArray.lower(`context`),_status)
+}
+    )
+    }
+
+ fun `e2eeVerifyDeviceBinding`(`accountId`: kotlin.ByteArray, `deviceId`: kotlin.ByteArray, `identity`: kotlin.ByteArray, `signatureKey`: kotlin.ByteArray, `signatureProof`: kotlin.ByteArray): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_halochat_e2ee_core_fn_func_e2ee_verify_device_binding(
+
+
+        FfiConverterByteArray.lower(`accountId`),
+        FfiConverterByteArray.lower(`deviceId`),
+        FfiConverterByteArray.lower(`identity`),
+        FfiConverterByteArray.lower(`signatureKey`),
+        FfiConverterByteArray.lower(`signatureProof`),_status)
 }
     )
     }

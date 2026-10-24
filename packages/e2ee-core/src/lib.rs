@@ -361,6 +361,43 @@ pub fn sign_device_binding(
         .map_err(|_| "Unable to sign MLS device binding".to_owned())
 }
 
+pub fn verify_device_binding(
+    account_id: &[u8],
+    device_id: &[u8],
+    identity: &[u8],
+    signature_key: &[u8],
+    signature_proof: &[u8],
+) -> bool {
+    use ed25519_dalek::{Signature, VerifyingKey};
+
+    if account_id.is_empty()
+        || device_id.is_empty()
+        || signature_key.len() != 32
+        || signature_proof.len() != 64
+    {
+        return false;
+    }
+    let mut expected_identity = b"halochat:user:".to_vec();
+    expected_identity.extend_from_slice(account_id);
+    expected_identity.extend_from_slice(b":device:");
+    expected_identity.extend_from_slice(device_id);
+    if identity != expected_identity {
+        return false;
+    }
+    let Ok(key_bytes) = <&[u8; 32]>::try_from(signature_key) else {
+        return false;
+    };
+    let Ok(proof_bytes) = <&[u8; 64]>::try_from(signature_proof) else {
+        return false;
+    };
+    let Ok(key) = VerifyingKey::from_bytes(key_bytes) else {
+        return false;
+    };
+    let message = device_binding_message(account_id, device_id, identity, signature_key);
+    key.verify_strict(&message, &Signature::from_bytes(proof_bytes))
+        .is_ok()
+}
+
 fn device_binding_message(
     account_id: &[u8],
     device_id: &[u8],
@@ -812,6 +849,40 @@ mod tests {
             safety_fingerprint(&added.state).unwrap(),
             safety_fingerprint(&substituted.state).unwrap()
         );
+    }
+
+    #[test]
+    fn device_binding_proof_authenticates_account_device_and_signing_key() {
+        let account_id = b"account-123";
+        let device_id = b"device-123";
+        let identity = b"halochat:user:account-123:device:device-123";
+        let (state, _) = create_device(identity).unwrap();
+        let member = device_identity(&state).unwrap();
+        let proof = sign_device_binding(&state, account_id, device_id).unwrap();
+
+        assert!(verify_device_binding(
+            account_id,
+            device_id,
+            &member.identity,
+            &member.signature_key,
+            &proof,
+        ));
+        assert!(!verify_device_binding(
+            b"other-account",
+            device_id,
+            &member.identity,
+            &member.signature_key,
+            &proof,
+        ));
+        let mut substituted_key = member.signature_key.clone();
+        substituted_key[0] ^= 1;
+        assert!(!verify_device_binding(
+            account_id,
+            device_id,
+            &member.identity,
+            &substituted_key,
+            &proof,
+        ));
     }
 
     #[test]
