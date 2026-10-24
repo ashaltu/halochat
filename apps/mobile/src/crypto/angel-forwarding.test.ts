@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const session = vi.hoisted(() => ({
   ensureChatE2ee: vi.fn(),
+  hasChatE2eeState: vi.fn(),
   ensureWhisperGroup: vi.fn(),
   hasWhisperGroupState: vi.fn(),
   decryptWhisper: vi.fn(),
@@ -32,6 +33,7 @@ describe("foreground Angel message sync", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     session.ensureChatE2ee.mockResolvedValue("ready");
+    session.hasChatE2eeState.mockResolvedValue(false);
     session.ensureWhisperGroup.mockResolvedValue("ready");
     session.hasWhisperGroupState.mockResolvedValue(true);
     session.decryptWhisper.mockResolvedValue(undefined);
@@ -122,6 +124,43 @@ describe("foreground Angel message sync", () => {
       "angel-user",
       "ended-period",
       [expect.objectContaining({ id: "during-access" })],
+      true,
+    );
+  });
+
+  it("catches up authorized messages after a chat ends without creating a new participant group", async () => {
+    const endedChat = {
+      ...chat(`ended-history-${Date.now()}`),
+      mode: "COMFORT",
+      status: "ENDED",
+      ownAngels: [],
+      ownAngelAccessPeriods: [{
+        id: "ended-access",
+        angelUserId: "angel-user",
+        authorizedFrom: "2026-01-01T00:00:00.000Z",
+        authorizedUntil: null,
+      }],
+    };
+    session.hasChatE2eeState.mockResolvedValue(true);
+    session.hasWhisperGroupState.mockResolvedValue(true);
+    session.fetchAndDecryptChatMessages.mockResolvedValue([
+      { id: "final-authorized-message", createdAt: "2026-01-01T00:00:05.000Z", plaintext: "visible" },
+    ]);
+
+    await expect(syncAngelForwardingForChat("protected-user", endedChat)).resolves.toEqual({
+      state: "current",
+      waitingCount: 0,
+    });
+
+    expect(session.ensureChatE2ee).not.toHaveBeenCalled();
+    expect(session.fetchAndDecryptChatMessages).toHaveBeenCalledWith("protected-user", endedChat.id, true);
+    expect(session.forwardChatMessagesToAngel).toHaveBeenCalledWith(
+      "protected-user",
+      endedChat.id,
+      "protected-user",
+      "angel-user",
+      "ended-access",
+      [expect.objectContaining({ id: "final-authorized-message" })],
       true,
     );
   });

@@ -1,6 +1,7 @@
 import {
   decryptWhisper,
   ensureChatE2ee,
+  hasChatE2eeState,
   hasWhisperGroupState,
   ensureWhisperGroup,
   fetchAndDecryptChatMessages,
@@ -32,13 +33,17 @@ export async function syncAngelForwardingForChat(userId: string, chat: AngelForw
     ...angel,
     authorizedUntil: null,
   }));
-  if (chat.status !== "ACTIVE" || !periods.length) {
+  if ((chat.status !== "ACTIVE" && chat.status !== "ENDED") || !periods.length) {
     return { state: "idle" as const, waitingCount: 0 };
   }
 
-  const partnerUserId = chat.requesterUserId === userId ? chat.recipientUserId : chat.requesterUserId;
-  if (await ensureChatE2ee(userId, chat.id, partnerUserId, chat.requesterUserId) === "waiting") {
-    return { state: "waiting" as const, waitingCount: 0 };
+  if (chat.status === "ENDED") {
+    if (!await hasChatE2eeState(userId, chat.id)) return { state: "idle" as const, waitingCount: 0 };
+  } else {
+    const partnerUserId = chat.requesterUserId === userId ? chat.recipientUserId : chat.requesterUserId;
+    if (await ensureChatE2ee(userId, chat.id, partnerUserId, chat.requesterUserId) === "waiting") {
+      return { state: "waiting" as const, waitingCount: 0 };
+    }
   }
 
   const inbox = await apiRequest<{ whispers: WhisperEnvelope[] }>(`/api/v1/chats/${chat.id}/whispers`);

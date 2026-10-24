@@ -410,6 +410,10 @@ export async function hasWhisperGroupState(userId: string, chatId: string, angel
   return !!await loadE2eeStateRecord(userId, whisperStateKey(chatId, angelUserId, accessId));
 }
 
+export async function hasChatE2eeState(userId: string, chatId: string) {
+  return !!await loadE2eeStateRecord(userId, chatId);
+}
+
 export async function decryptWhisper(
   userId: string,
   chatId: string,
