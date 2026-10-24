@@ -85,14 +85,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
   logout: async () => {
     const userId = get().user?.id;
-    try {
-      await apiRequest("/api/auth/sign-out", { method: "POST" });
-    } catch (err) {
-      // Ignore network errors on logout
-    }
+    const signOut = apiRequest("/api/auth/sign-out", { method: "POST" }).catch(() => {});
     setAuthToken(null);
-    await saveSession(null);
     set({ user: null, session: null });
-    if (userId) await clearE2eeMemory(userId);
+    await Promise.all([
+      saveSession(null),
+      userId ? clearE2eeMemory(userId) : Promise.resolve(),
+    ]);
+    await signOut;
   },
 }));
