@@ -223,8 +223,7 @@ chatsRouter.get("/", async (c) => {
       .where(
         and(
           eq(chatAngelAccess.chatId, chat.id),
-          eq(angelAssignments.userId, currentUser.id),
-          isNull(chatAngelAccess.authorizedUntil)
+          eq(angelAssignments.userId, currentUser.id)
         )
       );
 
@@ -240,7 +239,13 @@ chatsRouter.get("/", async (c) => {
         )
       );
 
-    const ownAngels = ownAccess.map((row) => ({
+    const ownAngelAccessPeriods = ownAccess.map((row) => ({
+      id: row.access.id,
+      angelUserId: row.angelUser.id,
+      authorizedFrom: row.access.authorizedFrom.toISOString(),
+      authorizedUntil: row.access.authorizedUntil?.toISOString() ?? null,
+    }));
+    const ownAngels = ownAccess.filter((row) => !row.access.authorizedUntil).map((row) => ({
       id: row.access.id,
       authorizedFrom: row.access.authorizedFrom.toISOString(),
       angelUserId: row.angelUser.id,
@@ -264,7 +269,8 @@ chatsRouter.get("/", async (c) => {
         },
         currentUser.id,
         ownAngels,
-        activeRestrictions.length > 0
+        activeRestrictions.length > 0,
+        ownAngelAccessPeriods
       )
     );
   }
@@ -306,8 +312,7 @@ chatsRouter.get("/:id", async (c) => {
     .where(
       and(
         eq(chatAngelAccess.chatId, chat.id),
-        eq(angelAssignments.userId, currentUser.id),
-        isNull(chatAngelAccess.authorizedUntil)
+        eq(angelAssignments.userId, currentUser.id)
       )
     );
 
@@ -322,7 +327,13 @@ chatsRouter.get("/:id", async (c) => {
       )
     );
 
-  const ownAngels = ownAccess.map((row) => ({
+  const ownAngelAccessPeriods = ownAccess.map((row) => ({
+    id: row.access.id,
+    angelUserId: row.angelUser.id,
+    authorizedFrom: row.access.authorizedFrom.toISOString(),
+    authorizedUntil: row.access.authorizedUntil?.toISOString() ?? null,
+  }));
+  const ownAngels = ownAccess.filter((row) => !row.access.authorizedUntil).map((row) => ({
     id: row.access.id,
     authorizedFrom: row.access.authorizedFrom.toISOString(),
     angelUserId: row.angelUser.id,
@@ -345,7 +356,8 @@ chatsRouter.get("/:id", async (c) => {
     },
     currentUser.id,
     ownAngels,
-    activeRestrictions.length > 0
+    activeRestrictions.length > 0,
+    ownAngelAccessPeriods
   );
 
   return c.json({ chat: sanitized });
@@ -590,9 +602,6 @@ chatsRouter.post("/:id/angel-messages", async (c) => {
     if (!chat || (chat.requesterUserId !== currentUser.id && chat.recipientUserId !== currentUser.id)) {
       return { status: 404, body: { code: "NOT_FOUND", message: "Chat not found" } };
     }
-    if (chat.status !== "ACTIVE") {
-      return { status: 409, body: { code: "CHAT_ENDED", message: "This chat has ended" } };
-    }
     const [access] = await tx.select({ access: chatAngelAccess, assignment: angelAssignments })
       .from(chatAngelAccess)
       .innerJoin(angelAssignments, eq(chatAngelAccess.angelAssignmentId, angelAssignments.id))
@@ -600,10 +609,8 @@ chatsRouter.post("/:id/angel-messages", async (c) => {
         eq(chatAngelAccess.id, parsed.data.accessId),
         eq(chatAngelAccess.chatId, chatId),
         eq(angelAssignments.userId, currentUser.id),
-        eq(angelAssignments.status, "ACTIVE"),
-        isNull(chatAngelAccess.authorizedUntil),
       )).limit(1).for("update");
-    if (!access) return { status: 409, body: { code: "ANGEL_ACCESS_INACTIVE", message: "This Angel access period is not active" } };
+    if (!access) return { status: 409, body: { code: "ANGEL_ACCESS_UNKNOWN", message: "This Angel access period is unavailable" } };
 
     const [source] = await tx.select().from(messages).where(and(
       eq(messages.id, parsed.data.sourceMessageId),

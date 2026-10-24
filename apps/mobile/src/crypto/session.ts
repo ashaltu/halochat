@@ -406,6 +406,10 @@ export type WhisperEnvelope = {
   createdAt: string;
 };
 
+export async function hasWhisperGroupState(userId: string, chatId: string, angelUserId: string, accessId: string) {
+  return !!await loadE2eeStateRecord(userId, whisperStateKey(chatId, angelUserId, accessId));
+}
+
 export async function decryptWhisper(
   userId: string,
   chatId: string,
@@ -480,19 +484,19 @@ export async function forwardChatMessagesToAngel(
   angelUserId: string,
   accessId: string,
   messages: Array<ServerMessage & { plaintext: string }>,
+  groupReady = false,
 ) {
   if (userId !== protectedUserId) throw new Error("Only the protected user can forward chat messages to their Angel");
   const eligibleMessages = messages.filter((message) => message.plaintext &&
     message.plaintext !== "This older message cannot be decrypted on this device." &&
     isMlsMetadata(message.encryptionMetadata) && message.encryptionMetadata.kind === "application");
-  if (!eligibleMessages.length) return 0;
-
-  if (await ensureWhisperGroup(userId, chatId, protectedUserId, angelUserId, accessId) === "waiting") return eligibleMessages.length;
+  if (!groupReady && await ensureWhisperGroup(userId, chatId, protectedUserId, angelUserId, accessId) === "waiting") return eligibleMessages.length;
   const stateKey = whisperStateKey(chatId, angelUserId, accessId);
   return withChatLock(userId, stateKey, async () => {
     await flushWhisperOutbox(userId, chatId, angelUserId, accessId);
     const record = await loadE2eeStateRecord(userId, stateKey);
     if (!record) return eligibleMessages.length;
+    if (!eligibleMessages.length) return 0;
     let state = record.state;
     let localData = record.localData;
     let forwardedMessageIds = localData.forwardedMessageIds ?? {};

@@ -790,7 +790,7 @@ describe("HaloChat MVP Integration Tests", () => {
         body: { ...message, accessId: "stale-access-period", encryptionMetadata: { ...message.encryptionMetadata, accessId: "stale-access-period" } },
       });
       expect(stalePeriod.status).toBe(409);
-      expect(stalePeriod.body.code).toBe("ANGEL_ACCESS_INACTIVE");
+      expect(stalePeriod.body.code).toBe("ANGEL_ACCESS_UNKNOWN");
 
       const db = await getDb();
       const [access] = await db.select().from(chatAngelAccess).where(eq(chatAngelAccess.id, accessId)).limit(1);
@@ -817,6 +817,33 @@ describe("HaloChat MVP Integration Tests", () => {
       });
       expect(preAuthorization.status).toBe(409);
       expect(preAuthorization.body.code).toBe("SOURCE_MESSAGE_OUTSIDE_ACCESS");
+
+      const accessEndsAt = new Date(access.authorizedFrom.getTime() + 5000);
+      const delayedSource = {
+        id: `authorized-before-leave-${crypto.randomUUID()}`,
+        chatId,
+        senderId: aishaId,
+        ciphertext: opaqueTransportFixture("authorized-before-leave").ciphertext,
+        encryptionMetadata: { protocol: "MLS", version: 1, kind: "application" },
+        seq: oldMessage.seq + 1,
+        createdAt: new Date(access.authorizedFrom.getTime() + 3000),
+      };
+      await db.insert(messages).values(delayedSource);
+      await db.update(chatAngelAccess).set({ authorizedUntil: accessEndsAt }).where(eq(chatAngelAccess.id, accessId));
+      const delayedCopy = await api(`/api/v1/chats/${chatId}/angel-messages`, {
+        method: "POST",
+        token: aishaToken,
+        body: {
+          ...message,
+          clientMsgId: `angel-late-copy-${crypto.randomUUID()}`,
+          sourceMessageId: delayedSource.id,
+          sourceSeq: delayedSource.seq,
+        },
+      });
+      await db.update(chatAngelAccess).set({ authorizedUntil: null }).where(eq(chatAngelAccess.id, accessId));
+      expect(delayedCopy.status).toBe(201);
+      const delayedHistory = await api(`/api/v1/angel/chats/${chatId}/messages`, { token: fatimaToken });
+      expect(delayedHistory.body.timeline).toContainEqual(expect.objectContaining({ sourceMessageId: delayedSource.id }));
     });
 
     it("rejects conflicting concurrent reuse of a Whisper id", async () => {

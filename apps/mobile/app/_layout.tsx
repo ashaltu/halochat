@@ -1,8 +1,11 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
+import { AppState, Platform } from "react-native";
 import { Stack } from "expo-router";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "../src/stores/auth.js";
 import { useRealtimeStore } from "../src/stores/realtime.js";
+import { apiRequest } from "../src/api/client.js";
+import { syncAngelForwardingForChat, type AngelForwardingChat } from "../src/crypto/angel-forwarding.js";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { registerPushToken } from "../src/push.js";
@@ -15,6 +18,43 @@ const queryClient = new QueryClient({
     },
   },
 });
+
+function AngelForwardingSync() {
+  const { user } = useAuthStore();
+  const client = useQueryClient();
+  const [appActive, setAppActive] = useState(Platform.OS === "web" || AppState.currentState === "active");
+
+  useQuery({
+    queryKey: ["angel-forwarding-sync", user?.id],
+    queryFn: async () => {
+      const { chats } = await apiRequest<{ chats: AngelForwardingChat[] }>("/api/v1/chats");
+      for (const chat of chats) {
+        if (chat.mode !== "PROTECTED" || !(chat.ownAngelAccessPeriods?.length || chat.ownAngels?.length)) continue;
+        try {
+          const status = await syncAngelForwardingForChat(user!.id, chat);
+          client.setQueryData(["angel-forwarding-status", chat.id], status);
+        } catch {
+          client.setQueryData(["angel-forwarding-status", chat.id], { state: "error", waitingCount: 0 });
+        }
+      }
+      return { syncedAt: Date.now() };
+    },
+    enabled: !!user?.id && appActive,
+    refetchInterval: 15_000,
+    refetchIntervalInBackground: false,
+  });
+
+  useEffect(() => {
+    if (Platform.OS === "web") return;
+    const subscription = AppState.addEventListener("change", (state) => {
+      setAppActive(state === "active");
+      if (state === "active") void client.invalidateQueries({ queryKey: ["angel-forwarding-sync", user?.id] });
+    });
+    return () => subscription.remove();
+  }, [client, user?.id]);
+
+  return null;
+}
 
 export default function RootLayout() {
   const { session, checkSession } = useAuthStore();
@@ -36,6 +76,7 @@ export default function RootLayout() {
   return (
     <SafeAreaProvider>
       <QueryClientProvider client={queryClient}>
+        <AngelForwardingSync />
         <StatusBar style="light" />
         <Stack
           screenOptions={{

@@ -103,6 +103,12 @@ export interface ChatDTO {
     status: string;
     hasActiveRestriction: boolean;
   }[];
+  ownAngelAccessPeriods?: {
+    id: string;
+    angelUserId: string;
+    authorizedFrom: string;
+    authorizedUntil: string | null;
+  }[];
   isSendingRestricted?: boolean;
 }
 
@@ -122,7 +128,8 @@ export function sanitizeChatForParticipant(
     status: string;
     hasActiveRestriction: boolean;
   }[] = [],
-  activeRestrictionsOnViewer: boolean = false
+  activeRestrictionsOnViewer: boolean = false,
+  ownAngelAccessPeriods: NonNullable<ChatDTO["ownAngelAccessPeriods"]> = [],
 ): ChatDTO {
   return {
     id: chat.id,
@@ -135,6 +142,7 @@ export function sanitizeChatForParticipant(
     lastMessageAt: chat.lastMessageAt,
     createdAt: chat.createdAt,
     ownAngels: ownAngels,
+    ownAngelAccessPeriods,
     isSendingRestricted: activeRestrictionsOnViewer,
   };
 }
