@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { randomBytes } = require("node:crypto");
 const {
   addMember,
   createDevice,
@@ -9,7 +10,9 @@ const {
   groupMembers,
   joinGroup,
   processCommit,
+  protectState,
   removeMember,
+  unprotectState,
 } = require("../target/wasm-node/halochat_e2ee_core.js");
 
 const memberJson = (member) =>
@@ -27,6 +30,17 @@ const membersJson = (members) => Buffer.from(JSON.stringify(members.map((member)
 const alice = createDevice(Buffer.from("alice/device-1"));
 const bob = createDevice(Buffer.from("bob/device-1"));
 let aliceState = createGroup(alice.state, Buffer.from("chat-group-1"));
+const storageKey = randomBytes(32);
+const stateContext = Buffer.from("account:alice/device:1/group:chat-group-1");
+const protectedState = protectState(aliceState, storageKey, stateContext);
+assert.equal(Buffer.from(protectedState).includes(Buffer.from("alice/device-1")), false);
+assert.deepEqual(
+  Buffer.from(unprotectState(protectedState, storageKey, stateContext)),
+  Buffer.from(aliceState),
+);
+assert.throws(() => unprotectState(protectedState, randomBytes(32), stateContext));
+assert.throws(() => unprotectState(protectedState, storageKey, Buffer.from("other group")));
+aliceState = unprotectState(protectedState, storageKey, stateContext);
 const added = addMember(aliceState, bob.keyPackage, memberJson(deviceIdentity(bob.state)));
 aliceState = added.state;
 let bobState = joinGroup(bob.state, added.welcome);
@@ -76,4 +90,4 @@ const charlieAfterRemoval = decryptApplication(charlieState, afterRemoval.cipher
 assert.equal(Buffer.from(charlieAfterRemoval.plaintext).toString(), "new epoch only");
 
 assert.throws(() => createDevice(new Uint8Array()), /identity cannot be empty/);
-console.log("WASM MLS membership, commit, messaging, and removal tests passed");
+console.log("WASM MLS state protection, membership, commit, messaging, and removal tests passed");

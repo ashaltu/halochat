@@ -35,6 +35,7 @@ dependencies = [
  "ctr",
  "ghash",
  "subtle",
+ "zeroize",
 ]
 
 [[package]]
@@ -604,6 +605,7 @@ dependencies = [
 name = "halochat-e2ee-core"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "getrandom 0.2.17",
  "js-sys",
  "openmls",

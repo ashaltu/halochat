@@ -22,6 +22,24 @@ fn to_js_error(error: String) -> JsValue {
     JsValue::from_str(&error)
 }
 
+#[wasm_bindgen(js_name = protectState)]
+pub fn protect_state(
+    state: Vec<u8>,
+    device_key: Vec<u8>,
+    context: Vec<u8>,
+) -> Result<Vec<u8>, JsValue> {
+    super::protect_state(&state, &device_key, &context).map_err(to_js_error)
+}
+
+#[wasm_bindgen(js_name = unprotectState)]
+pub fn unprotect_state(
+    envelope: Vec<u8>,
+    device_key: Vec<u8>,
+    context: Vec<u8>,
+) -> Result<Vec<u8>, JsValue> {
+    super::unprotect_state(&envelope, &device_key, &context).map_err(to_js_error)
+}
+
 fn parse_expected_members(encoded: &[u8]) -> Result<Vec<super::ExpectedMember>, JsValue> {
     serde_json::from_slice(encoded).map_err(|error| JsValue::from_str(&error.to_string()))
 }

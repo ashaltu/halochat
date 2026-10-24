@@ -4,6 +4,8 @@
 //! at rest and atomically persist each new snapshot with its outgoing wire data.
 //! The basic credential is not HaloChat identity authentication.
 
+use aes_gcm::aead::{Aead, KeyInit, Payload};
+use aes_gcm::{Aes256Gcm, Nonce};
 use openmls::prelude::{
     BasicCredential, Ciphersuite, CredentialWithKey, KeyPackage, KeyPackageIn, MlsGroup,
     MlsGroupCreateConfig, MlsGroupJoinConfig, MlsMessageBodyIn, MlsMessageIn, MlsMessageOut,
@@ -13,6 +15,7 @@ use openmls_basic_credential::SignatureKeyPair;
 #[cfg(test)]
 use openmls_rust_crypto::OpenMlsRustCrypto;
 use openmls_rust_crypto::{MemoryStorage, RustCrypto};
+use openmls_traits::random::OpenMlsRand;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tls_codec::{Deserialize as TlsDeserialize, Serialize as TlsSerialize};
@@ -23,6 +26,10 @@ mod wasm;
 
 const SUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
 const STATE_VERSION: u32 = 1;
+const STATE_ENVELOPE_MAGIC: &[u8; 4] = b"HCE1";
+const STATE_NONCE_LENGTH: usize = 12;
+const STATE_KEY_LENGTH: usize = 32;
+const STATE_CONTEXT_MAX_LENGTH: usize = 1024;
 
 pub struct AddMemberResult {
     pub state: Vec<u8>,
@@ -39,6 +46,70 @@ pub struct GroupCommitResult {
 pub struct ExpectedMember {
     pub identity: Vec<u8>,
     pub signature_key: Vec<u8>,
+}
+
+pub fn protect_state(state: &[u8], device_key: &[u8], context: &[u8]) -> Result<Vec<u8>, String> {
+    if device_key.len() != STATE_KEY_LENGTH {
+        return Err("MLS state key must be 32 bytes".to_owned());
+    }
+    if context.is_empty() || context.len() > STATE_CONTEXT_MAX_LENGTH {
+        return Err("MLS state context length is invalid".to_owned());
+    }
+    let provider = RustCrypto::default();
+    let nonce = provider
+        .random_array::<STATE_NONCE_LENGTH>()
+        .map_err(|error| error.to_string())?;
+    let cipher = Aes256Gcm::new_from_slice(device_key).map_err(|error| error.to_string())?;
+    let mut aad = Vec::with_capacity(STATE_ENVELOPE_MAGIC.len() + context.len());
+    aad.extend_from_slice(STATE_ENVELOPE_MAGIC);
+    aad.extend_from_slice(context);
+    let ciphertext = cipher
+        .encrypt(
+            Nonce::from_slice(&nonce),
+            Payload {
+                msg: state,
+                aad: &aad,
+            },
+        )
+        .map_err(|_| "Unable to encrypt MLS state".to_owned())?;
+    let mut envelope =
+        Vec::with_capacity(STATE_ENVELOPE_MAGIC.len() + nonce.len() + ciphertext.len());
+    envelope.extend_from_slice(STATE_ENVELOPE_MAGIC);
+    envelope.extend_from_slice(&nonce);
+    envelope.extend_from_slice(&ciphertext);
+    Ok(envelope)
+}
+
+pub fn unprotect_state(
+    envelope: &[u8],
+    device_key: &[u8],
+    context: &[u8],
+) -> Result<Vec<u8>, String> {
+    if device_key.len() != STATE_KEY_LENGTH {
+        return Err("MLS state key must be 32 bytes".to_owned());
+    }
+    if context.is_empty() || context.len() > STATE_CONTEXT_MAX_LENGTH {
+        return Err("MLS state context length is invalid".to_owned());
+    }
+    let minimum_length = STATE_ENVELOPE_MAGIC.len() + STATE_NONCE_LENGTH + 16;
+    if envelope.len() < minimum_length || !envelope.starts_with(STATE_ENVELOPE_MAGIC) {
+        return Err("Invalid MLS state envelope".to_owned());
+    }
+    let nonce_start = STATE_ENVELOPE_MAGIC.len();
+    let ciphertext_start = nonce_start + STATE_NONCE_LENGTH;
+    let cipher = Aes256Gcm::new_from_slice(device_key).map_err(|error| error.to_string())?;
+    let mut aad = Vec::with_capacity(STATE_ENVELOPE_MAGIC.len() + context.len());
+    aad.extend_from_slice(STATE_ENVELOPE_MAGIC);
+    aad.extend_from_slice(context);
+    cipher
+        .decrypt(
+            Nonce::from_slice(&envelope[nonce_start..ciphertext_start]),
+            Payload {
+                msg: &envelope[ciphertext_start..],
+                aad: &aad,
+            },
+        )
+        .map_err(|_| "Unable to authenticate MLS state envelope".to_owned())
 }
 
 #[derive(Deserialize, Serialize, Zeroize, ZeroizeOnDrop)]
@@ -632,6 +703,25 @@ mod tests {
         let mut snapshot: serde_json::Value = serde_json::from_slice(&identity).unwrap();
         snapshot["version"] = serde_json::Value::from(STATE_VERSION + 1);
         assert!(create_group(&serde_json::to_vec(&snapshot).unwrap(), b"group").is_err());
+    }
+
+    #[test]
+    fn state_envelope_encrypts_and_authenticates_snapshots() {
+        let (state, _) = create_device(b"alice/device-1").unwrap();
+        let key = [7_u8; STATE_KEY_LENGTH];
+        let context = b"account:alice/device:1/group:private-chat";
+        let envelope = protect_state(&state, &key, context).unwrap();
+        assert!(!envelope
+            .windows(b"alice/device-1".len())
+            .any(|window| window == b"alice/device-1"));
+        assert_eq!(unprotect_state(&envelope, &key, context).unwrap(), state);
+        assert!(unprotect_state(&envelope, &key, b"another context").is_err());
+        assert!(unprotect_state(&envelope, &[8_u8; STATE_KEY_LENGTH], context).is_err());
+        assert!(unprotect_state(&envelope, b"short key", context).is_err());
+
+        let mut tampered = envelope;
+        tampered[STATE_ENVELOPE_MAGIC.len()] ^= 1;
+        assert!(unprotect_state(&tampered, &key, context).is_err());
     }
 
     #[test]

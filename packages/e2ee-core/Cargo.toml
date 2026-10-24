@@ -8,6 +8,7 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+aes-gcm = { version = "=0.10.3", features = ["zeroize"] }
 openmls = { version = "=0.9.1", features = ["js"] }
 openmls_basic_credential = "=0.6.0"
 openmls_rust_crypto = "=0.6.0"
