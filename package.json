@@ -21,7 +21,7 @@
   },
   "pnpm": {
     "overrides": {
-      "better-call": "1.0.9"
+      "better-call": "1.0.12"
     }
   }
 }
