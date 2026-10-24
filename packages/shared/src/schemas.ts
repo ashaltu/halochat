@@ -133,6 +133,7 @@ export const PublishChatKeyPackageSchema = z.object({
   deviceId: z.string().min(20).max(80),
   identity: z.string().min(8).max(256).regex(BASE64_BYTES),
   signatureKey: z.string().min(40).max(128).regex(BASE64_BYTES),
+  signatureProof: z.string().min(80).max(128).regex(BASE64_BYTES),
   keyPackage: z.string().min(64).max(16_384).regex(BASE64_BYTES),
 });
 

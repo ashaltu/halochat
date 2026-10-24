@@ -92,6 +92,11 @@ public class HaloChatE2eeModule: Module {
     AsyncFunction("deviceIdentity") { (input: [String: Data]) throws -> [String: Data] in
       try withState(input) { _, raw in memberMap(try e2eeDeviceIdentity(state: raw)) }
     }
+    AsyncFunction("signDeviceBinding") { (input: [String: Data], accountId: Data, deviceId: Data) throws -> Data in
+      try withState(input) { _, raw in
+        try e2eeSignDeviceBinding(state: raw, accountId: accountId, deviceId: deviceId)
+      }
+    }
     AsyncFunction("createKeyPackage") { (input: [String: Data]) throws -> [String: Any] in
       try withState(input) { ref, raw in
         var result = try e2eeCreateKeyPackage(state: raw)

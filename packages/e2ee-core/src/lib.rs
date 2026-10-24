@@ -16,6 +16,7 @@ use openmls_basic_credential::SignatureKeyPair;
 use openmls_rust_crypto::OpenMlsRustCrypto;
 use openmls_rust_crypto::{MemoryStorage, RustCrypto};
 use openmls_traits::random::OpenMlsRand;
+use openmls_traits::signatures::Signer;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -307,6 +308,72 @@ pub fn device_identity(state: &[u8]) -> Result<ExpectedMember, String> {
         identity: snapshot.identity.clone(),
         signature_key: snapshot.signature_public_key.clone(),
     })
+}
+
+pub fn sign_device_binding(
+    state: &[u8],
+    account_id: &[u8],
+    device_id: &[u8],
+) -> Result<Vec<u8>, String> {
+    if account_id.is_empty()
+        || device_id.is_empty()
+        || account_id.len() > 256
+        || device_id.len() > 256
+    {
+        return Err("MLS account and device identifiers are invalid".to_owned());
+    }
+    if account_id
+        .iter()
+        .chain(device_id)
+        .any(|byte| *byte == 0 || !byte.is_ascii())
+    {
+        return Err(
+            "MLS account and device identifiers must be ASCII without NUL bytes".to_owned(),
+        );
+    }
+
+    let (snapshot, provider) = decode_state(state)?;
+    let expected_identity = [
+        b"halochat:user:".as_slice(),
+        account_id,
+        b":device:",
+        device_id,
+    ]
+    .concat();
+    if snapshot.identity != expected_identity {
+        return Err("MLS device identity does not match its account and device".to_owned());
+    }
+
+    let signer = SignatureKeyPair::read(
+        provider.storage(),
+        &snapshot.signature_public_key,
+        SUITE.signature_algorithm(),
+    )
+    .ok_or_else(|| "MLS signing key is missing".to_owned())?;
+    let message = device_binding_message(
+        account_id,
+        device_id,
+        &snapshot.identity,
+        &snapshot.signature_public_key,
+    );
+    signer
+        .sign(&message)
+        .map_err(|_| "Unable to sign MLS device binding".to_owned())
+}
+
+fn device_binding_message(
+    account_id: &[u8],
+    device_id: &[u8],
+    identity: &[u8],
+    signature_key: &[u8],
+) -> Vec<u8> {
+    let fields = [account_id, device_id, identity, signature_key];
+    let mut message = b"halochat:device-binding:v1".to_vec();
+    for field in fields {
+        message.extend_from_slice(&(field.len() as u32).to_be_bytes());
+        message.extend_from_slice(field);
+    }
+    message
 }
 
 pub fn group_members(state: &[u8]) -> Result<Vec<ExpectedMember>, String> {

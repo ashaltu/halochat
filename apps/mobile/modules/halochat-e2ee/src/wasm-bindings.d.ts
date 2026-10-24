@@ -12,6 +12,7 @@ declare module "*halochat_e2ee_core.js" {
   export function protectState(state: Uint8Array, key: Uint8Array, context: Uint8Array): Uint8Array;
   export function removeMember(state: Uint8Array, leafIndex: number): unknown;
   export function safetyFingerprint(state: Uint8Array): Uint8Array;
+  export function signDeviceBinding(state: Uint8Array, accountId: Uint8Array, deviceId: Uint8Array): Uint8Array;
   export function unprotectState(envelope: Uint8Array, key: Uint8Array, context: Uint8Array): Uint8Array;
   export default function init(): Promise<unknown>;
 }

@@ -61,6 +61,46 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(value) ?? "null";
 }
 
+function deviceBindingMessage(accountId: string, deviceId: string, identity: Buffer, signatureKey: Buffer) {
+  const fields = [Buffer.from(accountId), Buffer.from(deviceId), identity, signatureKey];
+  const lengthPrefix = (length: number) => {
+    const prefix = Buffer.alloc(4);
+    prefix.writeUInt32BE(length);
+    return prefix;
+  };
+  return Buffer.concat([
+    Buffer.from("halochat:device-binding:v1"),
+    ...fields.flatMap((field) => [lengthPrefix(field.length), field]),
+  ]);
+}
+
+function hasValidDeviceBinding(accountId: string, input: {
+  deviceId: string;
+  identity: string;
+  signatureKey: string;
+  signatureProof: string;
+}) {
+  const identity = Buffer.from(input.identity, "base64");
+  const signatureKey = Buffer.from(input.signatureKey, "base64");
+  const signatureProof = Buffer.from(input.signatureProof, "base64");
+  if (signatureKey.length !== 32 || signatureProof.length !== 64) return false;
+  try {
+    const publicKey = crypto.createPublicKey({
+      key: Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"), signatureKey]),
+      format: "der",
+      type: "spki",
+    });
+    return crypto.verify(
+      null,
+      deviceBindingMessage(accountId, input.deviceId, identity, signatureKey),
+      publicKey,
+      signatureProof,
+    );
+  } catch {
+    return false;
+  }
+}
+
 function messageMatchesRequest(
   message: typeof messages.$inferSelect,
   chatId: string,
@@ -295,6 +335,9 @@ chatsRouter.post("/:id/crypto/key-packages", async (c) => {
   ).toString("base64");
   if (parsed.data.identity !== expectedIdentity) {
     return c.json({ code: "INVALID_DEVICE_IDENTITY", message: "Device identity is not bound to this account" }, 400);
+  }
+  if (!hasValidDeviceBinding(currentUser.id, parsed.data)) {
+    return c.json({ code: "INVALID_DEVICE_BINDING", message: "Device signing key did not prove this account binding" }, 400);
   }
 
   await db.insert(cryptoKeyPackages).values({

@@ -1,5 +1,5 @@
 const assert = require("node:assert/strict");
-const { randomBytes } = require("node:crypto");
+const { createPublicKey, randomBytes, verify } = require("node:crypto");
 const {
   addMember,
   createDevice,
@@ -14,8 +14,21 @@ const {
   protectState,
   removeMember,
   safetyFingerprint,
+  signDeviceBinding,
   unprotectState,
 } = require("../target/wasm-node/halochat_e2ee_core.js");
+
+function deviceBindingMessage(accountId, deviceId, identity, signatureKey) {
+  const fields = [accountId, deviceId, identity, signatureKey];
+  return Buffer.concat([
+    Buffer.from("halochat:device-binding:v1"),
+    ...fields.flatMap((field) => {
+      const length = Buffer.alloc(4);
+      length.writeUInt32BE(field.length);
+      return [length, field];
+    }),
+  ]);
+}
 
 const memberJson = (member) =>
   Buffer.from(
@@ -30,6 +43,24 @@ const membersJson = (members) => Buffer.from(JSON.stringify(members.map((member)
 }))));
 
 const alice = createDevice(Buffer.from("alice/device-1"));
+const boundDeviceId = Buffer.from("device_alice_0123456789");
+const boundIdentity = Buffer.from("halochat:user:alice:device:device_alice_0123456789");
+const boundDevice = createDevice(boundIdentity);
+const boundMember = deviceIdentity(boundDevice.state);
+const bindingSignature = signDeviceBinding(boundDevice.state, Buffer.from("alice"), boundDeviceId);
+const publicKeyPrefix = Buffer.from("302a300506032b6570032100", "hex");
+const bindingPublicKey = createPublicKey({
+  key: Buffer.concat([publicKeyPrefix, Buffer.from(boundMember.signatureKey)]),
+  format: "der",
+  type: "spki",
+});
+assert.equal(verify(null, deviceBindingMessage(
+  Buffer.from("alice"),
+  boundDeviceId,
+  Buffer.from(boundMember.identity),
+  Buffer.from(boundMember.signatureKey),
+), bindingPublicKey, Buffer.from(bindingSignature)), true);
+assert.throws(() => signDeviceBinding(boundDevice.state, Buffer.from("mallory"), boundDeviceId));
 const bob = createDevice(Buffer.from("bob/device-1"));
 const rotatedBobKeyPackage = createKeyPackage(bob.state);
 assert.notDeepEqual(Buffer.from(rotatedBobKeyPackage.keyPackage), Buffer.from(bob.keyPackage));
@@ -99,4 +130,4 @@ const charlieAfterRemoval = decryptApplication(charlieState, afterRemoval.cipher
 assert.equal(Buffer.from(charlieAfterRemoval.plaintext).toString(), "new epoch only");
 
 assert.throws(() => createDevice(new Uint8Array()), /identity cannot be empty/);
-console.log("WASM MLS state protection, membership, commit, messaging, and removal tests passed");
+console.log("WASM MLS state protection, device binding, membership, commit, messaging, and removal tests passed");

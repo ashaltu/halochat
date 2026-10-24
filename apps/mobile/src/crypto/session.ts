@@ -118,6 +118,7 @@ async function publishChatKeyPackage(userId: string, chatId: string) {
   if (!(await hasPublishedChatKeyPackage(userId, chatId))) {
     const member = await E2eeNative.deviceIdentity(deviceState);
     const created = await E2eeNative.createKeyPackage(deviceState);
+    const signatureProof = await E2eeNative.signDeviceBinding(created.state, asciiBytes(userId), asciiBytes(device.deviceId));
     await saveE2eeState(userId, "device", created.state);
     await apiRequest(`/api/v1/chats/${chatId}/crypto/key-packages`, {
       method: "POST",
@@ -125,6 +126,7 @@ async function publishChatKeyPackage(userId: string, chatId: string) {
         deviceId: device.deviceId,
         identity: base64.fromByteArray(member.identity),
         signatureKey: base64.fromByteArray(member.signatureKey),
+        signatureProof: base64.fromByteArray(signatureProof),
         keyPackage: base64.fromByteArray(created.keyPackage),
       }),
     });

@@ -102,6 +102,9 @@ const E2eeWeb = {
   async deviceIdentity(state: E2eeState): Promise<E2eeMember> {
     return wasm.deviceIdentity(await open(state)) as E2eeMember;
   },
+  async signDeviceBinding(state: E2eeState, accountId: Uint8Array, deviceId: Uint8Array): Promise<Uint8Array> {
+    return wasm.signDeviceBinding(await open(state), accountId, deviceId);
+  },
   async createGroup(state: E2eeState, groupId: Uint8Array, context: Uint8Array): Promise<E2eeState> {
     const result = wasm.createGroup(await open(state), groupId);
     return protect(result, state.deviceKey, context);

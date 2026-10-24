@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { createHash } from "node:crypto";
+import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { createApp } from "../../apps/server/src/app.js";
 import { closeDb, eq, getDb, initDbSchema, messages, users } from "@halochat/db";
 import {
@@ -13,6 +13,27 @@ import {
   ProfileCorrectionField,
   Sex,
 } from "@halochat/shared";
+
+function createDeviceBinding(accountId: string, deviceId: string) {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const signatureKey = Buffer.from(publicKey.export({ format: "der", type: "spki" })).subarray(-32);
+  const identity = Buffer.from(`halochat:user:${accountId}:device:${deviceId}`);
+  const fields = [Buffer.from(accountId), Buffer.from(deviceId), identity, signatureKey];
+  const message = Buffer.concat([
+    Buffer.from("halochat:device-binding:v1"),
+    ...fields.flatMap((field) => {
+      const length = Buffer.alloc(4);
+      length.writeUInt32BE(field.length);
+      return [length, field];
+    }),
+  ]);
+  return {
+    deviceId,
+    identity: identity.toString("base64"),
+    signatureKey: signatureKey.toString("base64"),
+    signatureProof: sign(null, message, privateKey).toString("base64"),
+  };
+}
 
 describe("HaloChat MVP Integration Tests", () => {
   let app: ReturnType<typeof createApp>;
@@ -346,17 +367,21 @@ describe("HaloChat MVP Integration Tests", () => {
     describe("participant KeyPackage delivery", () => {
       const omarDeviceId = "device_omar_0123456789";
       const aishaDeviceId = "device_aisha_01234567";
-      const publicKey = Buffer.alloc(32, 7).toString("base64");
+      let omarBinding: ReturnType<typeof createDeviceBinding>;
+      let aishaBinding: ReturnType<typeof createDeviceBinding>;
       const keyPackage = Buffer.alloc(64, 9).toString("base64");
+
+      beforeAll(() => {
+        omarBinding = createDeviceBinding(omarId, omarDeviceId);
+        aishaBinding = createDeviceBinding(aishaId, aishaDeviceId);
+      });
 
       it("binds published KeyPackages to the authenticated device identity", async () => {
         const res = await api(`/api/v1/chats/${chatId}/crypto/key-packages`, {
           method: "POST",
           token: omarToken,
           body: {
-            deviceId: omarDeviceId,
-            identity: Buffer.from(`halochat:user:${omarId}:device:${omarDeviceId}`).toString("base64"),
-            signatureKey: publicKey,
+            ...omarBinding,
             keyPackage,
           },
         });
@@ -366,14 +391,21 @@ describe("HaloChat MVP Integration Tests", () => {
           method: "POST",
           token: omarToken,
           body: {
-            deviceId: omarDeviceId,
+            ...omarBinding,
             identity: Buffer.from("halochat:user:someone-else:device:device_omar_0123456789").toString("base64"),
-            signatureKey: publicKey,
             keyPackage,
           },
         });
         expect(mismatch.status).toBe(400);
         expect(mismatch.body.code).toBe("INVALID_DEVICE_IDENTITY");
+
+        const invalidProof = await api(`/api/v1/chats/${chatId}/crypto/key-packages`, {
+          method: "POST",
+          token: omarToken,
+          body: { ...omarBinding, signatureProof: Buffer.alloc(64, 1).toString("base64"), keyPackage },
+        });
+        expect(invalidProof.status).toBe(400);
+        expect(invalidProof.body.code).toBe("INVALID_DEVICE_BINDING");
       });
 
       it("allows only one peer device to claim a KeyPackage and keeps same-device retries recoverable", async () => {
@@ -381,9 +413,7 @@ describe("HaloChat MVP Integration Tests", () => {
           method: "POST",
           token: aishaToken,
           body: {
-            deviceId: aishaDeviceId,
-            identity: Buffer.from(`halochat:user:${aishaId}:device:${aishaDeviceId}`).toString("base64"),
-            signatureKey: publicKey,
+            ...aishaBinding,
             keyPackage,
           },
         });
@@ -404,7 +434,7 @@ describe("HaloChat MVP Integration Tests", () => {
         expect(claimed.body.keyPackage).toMatchObject({
           userId: aishaId,
           deviceId: aishaDeviceId,
-          signatureKey: publicKey,
+          signatureKey: aishaBinding.signatureKey,
           keyPackage,
         });
         const rejected = await api(`/api/v1/chats/${chatId}/crypto/key-packages/${aishaId}?deviceId=device_other_0123456789`, { token: omarToken });

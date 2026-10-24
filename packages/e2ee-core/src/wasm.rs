@@ -57,6 +57,15 @@ pub fn device_identity(state: Vec<u8>) -> Result<JsValue, JsValue> {
     member_value(&member)
 }
 
+#[wasm_bindgen(js_name = signDeviceBinding)]
+pub fn sign_device_binding(
+    state: Vec<u8>,
+    account_id: Vec<u8>,
+    device_id: Vec<u8>,
+) -> Result<Vec<u8>, JsValue> {
+    super::sign_device_binding(&state, &account_id, &device_id).map_err(to_js_error)
+}
+
 #[wasm_bindgen(js_name = groupMembers)]
 pub fn group_members(state: Vec<u8>) -> Result<JsValue, JsValue> {
     let members = super::group_members(&state).map_err(to_js_error)?;

@@ -81,6 +81,9 @@ class HaloChatE2eeModule : Module() {
     AsyncFunction("deviceIdentity") { input: Map<String, ByteArray> ->
       withState(input) { _, raw -> e2eeDeviceIdentity(raw).asMap() }
     }
+    AsyncFunction("signDeviceBinding") { input: Map<String, ByteArray>, accountId: ByteArray, deviceId: ByteArray ->
+      withState(input) { _, raw -> e2eeSignDeviceBinding(raw, accountId, deviceId) }
+    }
     AsyncFunction("createKeyPackage") { input: Map<String, ByteArray> ->
       withState(input) { ref, raw ->
         val result = e2eeCreateKeyPackage(raw)
