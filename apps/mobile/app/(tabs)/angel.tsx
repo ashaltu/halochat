@@ -93,17 +93,8 @@ export default function AngelTabScreen() {
   });
 
   const sendWhisper = useMutation({
-    mutationFn: () => {
-      if (whisperText.length > 50) {
-        throw new Error("Whispers are limited to 50 characters.");
-      }
-      return apiRequest(`/api/v1/angel/chats/${selectedChatId}/whispers`, {
-        method: "POST",
-        body: JSON.stringify({
-          ciphertext: whisperText,
-          plaintextCharLength: whisperText.length,
-        }),
-      });
+    mutationFn: async () => {
+      throw new Error("Encrypted Whisper support is not ready on this device.");
     },
     onSuccess: () => {
       setWhisperModalVisible(false);
@@ -338,6 +329,9 @@ export default function AngelTabScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Send Private Whisper</Text>
+            <Text style={styles.cardSub}>
+              Encrypted Whispers are not available yet. The message will not be sent until private encryption is ready.
+            </Text>
             <Text style={styles.modalSub}>
               Only visible to your protected person. The other participant and other Angels cannot see it.
             </Text>
@@ -362,7 +356,7 @@ export default function AngelTabScreen() {
               <TouchableOpacity
                 style={[styles.btn, styles.acceptBtn]}
                 onPress={() => sendWhisper.mutate()}
-                disabled={sendWhisper.isPending || !whisperText.trim()}
+                disabled
               >
                 <Text style={styles.btnText}>Send Whisper</Text>
               </TouchableOpacity>

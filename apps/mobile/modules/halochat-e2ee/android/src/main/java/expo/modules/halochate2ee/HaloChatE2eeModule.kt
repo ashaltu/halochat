@@ -50,6 +50,24 @@ class HaloChatE2eeModule : Module() {
     AsyncFunction("generateDeviceKey") {
       ByteArray(32).also { SecureRandom().nextBytes(it) }
     }
+    AsyncFunction("protectLocalData") { data: ByteArray, deviceKey: ByteArray, context: ByteArray ->
+      try {
+        e2eeProtectState(data, deviceKey, context)
+      } finally {
+        data.fill(0)
+        deviceKey.fill(0)
+        context.fill(0)
+      }
+    }
+    AsyncFunction("unprotectLocalData") { envelope: ByteArray, deviceKey: ByteArray, context: ByteArray ->
+      try {
+        e2eeUnprotectState(envelope, deviceKey, context)
+      } finally {
+        envelope.fill(0)
+        deviceKey.fill(0)
+        context.fill(0)
+      }
+    }
     AsyncFunction("createDevice") { identity: ByteArray, deviceKey: ByteArray, context: ByteArray ->
       val state = StateRef(ByteArray(0), deviceKey.copyOf(), context.copyOf())
       try {

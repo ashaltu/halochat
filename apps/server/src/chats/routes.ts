@@ -30,6 +30,7 @@ import {
   ChatAngelInvitationSchema,
   sanitizeChatForParticipant,
   WsEventType,
+  isParticipantOnlyMessage,
 } from "@halochat/shared";
 import { wsManager } from "../realtime/index.js";
 import { AppEnv } from "../types.js";
@@ -38,6 +39,80 @@ import { notifyOfflineUsers } from "../notifications/push.js";
 export const chatsRouter = new Hono<AppEnv>();
 
 chatsRouter.use("*", authMiddleware);
+
+function messagePayload(message: typeof messages.$inferSelect) {
+  return {
+    id: message.id,
+    chatId: message.chatId,
+    senderId: message.senderId,
+    ciphertext: message.ciphertext,
+    encryptionMetadata: message.encryptionMetadata,
+    seq: message.seq,
+    createdAt: message.createdAt.toISOString(),
+  };
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const object = value as Record<string, unknown>;
+    return `{${Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(object[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+function messageMatchesRequest(
+  message: typeof messages.$inferSelect,
+  chatId: string,
+  senderId: string,
+  ciphertext: string,
+  encryptionMetadata: Record<string, unknown> | undefined
+) {
+  return (
+    message.chatId === chatId &&
+    message.senderId === senderId &&
+    message.ciphertext === ciphertext &&
+    canonicalJson(message.encryptionMetadata ?? null) === canonicalJson(encryptionMetadata ?? null)
+  );
+}
+
+async function consumeWelcomeKeyPackage(
+  db: Awaited<ReturnType<typeof getDb>>,
+  chatId: string,
+  ownerUserId: string,
+  metadata: Record<string, unknown>,
+  clientMsgId: string | undefined,
+) {
+  if (metadata.kind !== "welcome") return true;
+  if (
+    typeof metadata.keyPackageId !== "string" ||
+    typeof metadata.claimantDeviceId !== "string" ||
+    !clientMsgId
+  ) return false;
+
+  const consumed = await db.update(cryptoKeyPackages).set({
+    consumedAt: new Date(),
+    consumedByClientMsgId: clientMsgId,
+  }).where(and(
+    eq(cryptoKeyPackages.id, metadata.keyPackageId),
+    eq(cryptoKeyPackages.chatId, chatId),
+    eq(cryptoKeyPackages.userId, ownerUserId),
+    eq(cryptoKeyPackages.claimedByDeviceId, metadata.claimantDeviceId),
+    isNull(cryptoKeyPackages.consumedAt),
+  )).returning();
+  if (consumed.length) return true;
+
+  const [existingClaim] = await db.select({ consumedByClientMsgId: cryptoKeyPackages.consumedByClientMsgId })
+    .from(cryptoKeyPackages)
+    .where(and(
+      eq(cryptoKeyPackages.id, metadata.keyPackageId),
+      eq(cryptoKeyPackages.chatId, chatId),
+      eq(cryptoKeyPackages.userId, ownerUserId),
+      eq(cryptoKeyPackages.claimedByDeviceId, metadata.claimantDeviceId),
+      eq(cryptoKeyPackages.consumedByClientMsgId, clientMsgId),
+    )).limit(1);
+  return !!existingClaim;
+}
 
 chatsRouter.get("/", async (c) => {
   const currentUser = c.get("user");
@@ -238,7 +313,9 @@ chatsRouter.post("/:id/crypto/key-packages", async (c) => {
       identity: parsed.data.identity,
       signatureKey: parsed.data.signatureKey,
       keyPackage: parsed.data.keyPackage,
+      claimedByDeviceId: null,
       consumedAt: null,
+      consumedByClientMsgId: null,
       createdAt: new Date(),
     },
   });
@@ -250,6 +327,7 @@ chatsRouter.get("/:id/crypto/key-packages/:userId", async (c) => {
   const currentUser = c.get("user");
   const chatId = c.req.param("id");
   const targetUserId = c.req.param("userId");
+  const claimantDeviceId = c.req.query("deviceId");
   const db = await getDb();
   const [chat] = await db.select().from(chats).where(eq(chats.id, chatId)).limit(1);
   if (!chat || (chat.requesterUserId !== currentUser.id && chat.recipientUserId !== currentUser.id)) {
@@ -263,12 +341,16 @@ chatsRouter.get("/:id/crypto/key-packages/:userId", async (c) => {
   if (chat.status !== "ACTIVE") {
     return c.json({ code: "CHAT_ENDED", message: "This chat has ended" }, 409);
   }
+  if (!claimantDeviceId || !/^[A-Za-z0-9+/=_-]{20,80}$/.test(claimantDeviceId)) {
+    return c.json({ code: "INVALID_DEVICE_ID", message: "A valid claimant device ID is required" }, 400);
+  }
 
   const candidates = await db.select().from(cryptoKeyPackages).where(and(
     eq(cryptoKeyPackages.chatId, chatId),
     eq(cryptoKeyPackages.userId, partnerUserId),
     eq(cryptoKeyPackages.scope, "PARTICIPANT"),
     isNull(cryptoKeyPackages.consumedAt),
+    or(isNull(cryptoKeyPackages.claimedByDeviceId), eq(cryptoKeyPackages.claimedByDeviceId, claimantDeviceId)),
   )).orderBy(asc(cryptoKeyPackages.createdAt)).limit(1);
   const candidate = candidates[0];
   if (!candidate) {
@@ -276,8 +358,12 @@ chatsRouter.get("/:id/crypto/key-packages/:userId", async (c) => {
   }
 
   const claimed = await db.update(cryptoKeyPackages)
-    .set({ consumedAt: new Date() })
-    .where(and(eq(cryptoKeyPackages.id, candidate.id), isNull(cryptoKeyPackages.consumedAt)))
+    .set({ claimedByDeviceId: claimantDeviceId })
+    .where(and(
+      eq(cryptoKeyPackages.id, candidate.id),
+      isNull(cryptoKeyPackages.consumedAt),
+      or(isNull(cryptoKeyPackages.claimedByDeviceId), eq(cryptoKeyPackages.claimedByDeviceId, claimantDeviceId)),
+    ))
     .returning();
   if (!claimed.length) {
     return c.json({ code: "KEY_PACKAGE_UNAVAILABLE", message: "A device key package was just claimed; retry" }, 409);
@@ -285,6 +371,7 @@ chatsRouter.get("/:id/crypto/key-packages/:userId", async (c) => {
 
   return c.json({
     keyPackage: {
+      keyPackageId: candidate.id,
       userId: candidate.userId,
       deviceId: candidate.deviceId,
       identity: candidate.identity,
@@ -380,6 +467,50 @@ chatsRouter.post("/:id/messages", async (c) => {
     );
   }
 
+  if (parseResult.data.clientMsgId) {
+    const [existingMessage] = await db
+      .select()
+      .from(messages)
+      .where(and(
+        eq(messages.senderId, currentUser.id),
+        eq(messages.clientMsgId, parseResult.data.clientMsgId)
+      ))
+      .limit(1);
+    if (existingMessage) {
+      if (!messageMatchesRequest(
+        existingMessage,
+        chatId,
+        currentUser.id,
+        parseResult.data.ciphertext,
+        parseResult.data.encryptionMetadata
+      )) {
+        return c.json({ code: "CLIENT_MESSAGE_ID_REUSED", message: "Message ID was already used for different content" }, 409);
+      }
+      const peerUserId = chat.requesterUserId === currentUser.id ? chat.recipientUserId : chat.requesterUserId;
+      if (!await consumeWelcomeKeyPackage(
+        db,
+        chatId,
+        peerUserId,
+        parseResult.data.encryptionMetadata,
+        parseResult.data.clientMsgId,
+      )) {
+        return c.json({ code: "KEY_PACKAGE_CLAIM_INVALID", message: "Welcome does not match a package claimed by this device" }, 409);
+      }
+      return c.json({ message: messagePayload(existingMessage) }, 200);
+    }
+  }
+
+  const peerUserId = chat.requesterUserId === currentUser.id ? chat.recipientUserId : chat.requesterUserId;
+  if (!await consumeWelcomeKeyPackage(
+    db,
+    chatId,
+    peerUserId,
+    parseResult.data.encryptionMetadata,
+    parseResult.data.clientMsgId,
+  )) {
+    return c.json({ code: "KEY_PACKAGE_CLAIM_INVALID", message: "Welcome does not match a package claimed by this device" }, 409);
+  }
+
   const messageId = crypto.randomUUID();
   const now = new Date();
   let nextSeq = 1;
@@ -397,6 +528,7 @@ chatsRouter.post("/:id/messages", async (c) => {
         id: messageId,
         chatId,
         senderId: currentUser.id,
+        clientMsgId: parseResult.data.clientMsgId || null,
         ciphertext: parseResult.data.ciphertext,
         encryptionMetadata: parseResult.data.encryptionMetadata || null,
         seq: nextSeq,
@@ -404,21 +536,54 @@ chatsRouter.post("/:id/messages", async (c) => {
       });
       inserted = true;
     } catch (error) {
+      if (parseResult.data.clientMsgId) {
+        const [existingMessage] = await db
+          .select()
+          .from(messages)
+          .where(and(
+            eq(messages.senderId, currentUser.id),
+            eq(messages.clientMsgId, parseResult.data.clientMsgId)
+          ))
+          .limit(1);
+        if (existingMessage) {
+          if (!messageMatchesRequest(
+            existingMessage,
+            chatId,
+            currentUser.id,
+            parseResult.data.ciphertext,
+            parseResult.data.encryptionMetadata
+          )) {
+            return c.json({ code: "CLIENT_MESSAGE_ID_REUSED", message: "Message ID was already used for different content" }, 409);
+          }
+          const peerUserId = chat.requesterUserId === currentUser.id ? chat.recipientUserId : chat.requesterUserId;
+          if (!await consumeWelcomeKeyPackage(
+            db,
+            chatId,
+            peerUserId,
+            parseResult.data.encryptionMetadata,
+            parseResult.data.clientMsgId,
+          )) {
+            return c.json({ code: "KEY_PACKAGE_CLAIM_INVALID", message: "Welcome does not match a package claimed by this device" }, 409);
+          }
+          return c.json({ message: messagePayload(existingMessage) }, 200);
+        }
+      }
       if (attempt === 2) throw error;
     }
   }
 
   await db.update(chats).set({ lastMessageAt: now, updatedAt: now }).where(eq(chats.id, chatId));
 
-  const msgPayload = {
+  const msgPayload = messagePayload({
     id: messageId,
     chatId,
     senderId: currentUser.id,
+    clientMsgId: parseResult.data.clientMsgId || null,
     ciphertext: parseResult.data.ciphertext,
     encryptionMetadata: parseResult.data.encryptionMetadata || null,
     seq: nextSeq,
-    createdAt: now.toISOString(),
-  };
+    createdAt: now,
+  });
 
   // Broadcast to participants
   wsManager.sendToUser(chat.requesterUserId, {
@@ -437,6 +602,7 @@ chatsRouter.post("/:id/messages", async (c) => {
     .where(and(eq(chatAngelAccess.chatId, chatId), isNull(chatAngelAccess.authorizedUntil)));
 
   for (const access of activeAngels) {
+    if (isParticipantOnlyMessage(msgPayload.encryptionMetadata)) continue;
     wsManager.sendToUser(access.angelUserId, {
       type: WsEventType.MESSAGE_NEW,
       message: msgPayload,

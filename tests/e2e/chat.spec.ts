@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test("two users can establish a comfort chat and exchange a message", async ({ request }) => {
+test("two users can establish a comfort chat and relay an MLS-shaped envelope", async ({ request }) => {
   const suffix = Date.now().toString().slice(-10);
   const signUp = async (prefix: string, sex: "MALE" | "FEMALE") => {
     const response = await request.post("http://127.0.0.1:3000/api/auth/sign-up/email", {
@@ -45,7 +45,10 @@ test("two users can establish a comfort chat and exchange a message", async ({ r
     `http://127.0.0.1:3000/api/v1/chats/${chats.chats[0].id}/messages`,
     {
       headers: auth(requester.session.token),
-      data: { ciphertext: "e2e transport test" },
+      data: {
+        ciphertext: Buffer.from("test envelope", "utf8").toString("base64"),
+        encryptionMetadata: { protocol: "MLS", version: 1, kind: "application" },
+      },
     }
   );
   expect(messageResponse.status()).toBe(201);

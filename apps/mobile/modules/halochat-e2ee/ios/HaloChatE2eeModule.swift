@@ -58,6 +58,28 @@ public class HaloChatE2eeModule: Module {
       }
       return bytes
     }
+    AsyncFunction("protectLocalData") { (data: Data, deviceKey: Data, context: Data) throws -> Data in
+      var cleartext = data
+      var key = deviceKey
+      var aad = context
+      defer {
+        cleartext.resetBytes(in: 0..<cleartext.count)
+        key.resetBytes(in: 0..<key.count)
+        aad.resetBytes(in: 0..<aad.count)
+      }
+      return try e2eeProtectState(state: cleartext, deviceKey: key, context: aad)
+    }
+    AsyncFunction("unprotectLocalData") { (envelope: Data, deviceKey: Data, context: Data) throws -> Data in
+      var protected = envelope
+      var key = deviceKey
+      var aad = context
+      defer {
+        protected.resetBytes(in: 0..<protected.count)
+        key.resetBytes(in: 0..<key.count)
+        aad.resetBytes(in: 0..<aad.count)
+      }
+      return try e2eeUnprotectState(envelope: protected, deviceKey: key, context: aad)
+    }
     AsyncFunction("createDevice") { (identity: Data, deviceKey: Data, context: Data) throws -> [String: Any] in
       var result = try e2eeCreateDevice(identity: identity)
       var state = StateRef(envelope: Data(), deviceKey: deviceKey, context: context)

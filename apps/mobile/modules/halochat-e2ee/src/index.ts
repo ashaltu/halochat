@@ -34,6 +34,8 @@ export type E2eeApplication = {
 
 type HaloChatE2eeNativeModule = {
   generateDeviceKey(): Promise<Uint8Array>;
+  protectLocalData(data: Uint8Array, deviceKey: Uint8Array, context: Uint8Array): Promise<Uint8Array>;
+  unprotectLocalData(envelope: Uint8Array, deviceKey: Uint8Array, context: Uint8Array): Promise<Uint8Array>;
   createDevice(identity: Uint8Array, deviceKey: Uint8Array, context: Uint8Array): Promise<E2eeDevice>;
   createKeyPackage(state: E2eeState): Promise<E2eeKeyPackage>;
   deviceIdentity(state: E2eeState): Promise<E2eeMember>;

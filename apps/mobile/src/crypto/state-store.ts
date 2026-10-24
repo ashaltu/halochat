@@ -11,6 +11,36 @@ type DeviceContext = {
   context: Uint8Array;
 };
 
+export type E2eePendingMessage = {
+  clientMsgId: string;
+  ciphertext: string;
+  encryptionMetadata: Record<string, unknown>;
+  plaintext?: string;
+};
+
+export type E2eeLocalData = {
+  lastSeq: number;
+  pendingMessages: E2eePendingMessage[];
+  plaintextByMessageId: Record<string, string>;
+};
+
+export type E2eeStateRecord = {
+  state: E2eeState;
+  localData: E2eeLocalData;
+};
+
+type StateFile = {
+  version: 1;
+  envelope: string;
+  localDataEnvelope: string;
+};
+
+const EMPTY_LOCAL_DATA: E2eeLocalData = {
+  lastSeq: 0,
+  pendingMessages: [],
+  plaintextByMessageId: {},
+};
+
 function asciiBytes(value: string): Uint8Array {
   if (!/^[\x20-\x7e]+$/.test(value)) throw new Error("Invalid E2EE context");
   return Uint8Array.from(value, (character) => character.charCodeAt(0));
@@ -86,6 +116,77 @@ function pointerKey(userId: string, chatId: string) {
   return `halochat.e2ee.state.${safeFilePart(userId)}.${safeFilePart(chatId)}`;
 }
 
+function keyPackagePublishedKey(userId: string, chatId: string) {
+  return `halochat.e2ee.key-package.${safeFilePart(userId)}.${safeFilePart(chatId)}`;
+}
+
+function localDataContext(userId: string, deviceId: string, chatId: string) {
+  return contextFor(userId, deviceId, `local-cache:${chatId}`);
+}
+
+function utf8Bytes(value: string): Uint8Array {
+  const encoded = encodeURIComponent(value).replace(/%([0-9A-F]{2})/g, (_, hex: string) =>
+    String.fromCharCode(parseInt(hex, 16))
+  );
+  return Uint8Array.from(encoded, (character) => character.charCodeAt(0));
+}
+
+function utf8String(value: Uint8Array): string {
+  const encoded = Array.from(value, (byte) => `%${byte.toString(16).padStart(2, "0")}`).join("");
+  return decodeURIComponent(encoded);
+}
+
+function isLocalData(value: unknown): value is E2eeLocalData {
+  if (!value || typeof value !== "object") return false;
+  const data = value as Partial<E2eeLocalData>;
+  return Number.isSafeInteger(data.lastSeq) && data.lastSeq! >= 0 &&
+    Array.isArray(data.pendingMessages) &&
+    !!data.plaintextByMessageId && typeof data.plaintextByMessageId === "object";
+}
+
+async function readStateFile(userId: string, chatId: string, device: DeviceContext) {
+  const filename = await SecureStore.getItemAsync(pointerKey(userId, chatId));
+  if (!filename) return null;
+
+  const uri = stateUri(userId, device.deviceId, chatId, filename);
+  const contents = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.UTF8 });
+  let parsed: Partial<StateFile>;
+  try {
+    parsed = JSON.parse(contents) as Partial<StateFile>;
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      return { filename, stateEnvelope: contents, localData: EMPTY_LOCAL_DATA };
+    }
+    throw error;
+  }
+
+  if (!parsed || typeof parsed !== "object" || parsed.version !== 1 || typeof parsed.envelope !== "string" || typeof parsed.localDataEnvelope !== "string") {
+    throw new Error("Invalid encrypted E2EE state file");
+  }
+  const localDataBytes = await E2eeNative.unprotectLocalData(
+    base64.toByteArray(parsed.localDataEnvelope),
+    device.deviceKey.slice(),
+    localDataContext(userId, device.deviceId, chatId).slice(),
+  );
+  let localData: unknown;
+  try {
+    localData = JSON.parse(utf8String(localDataBytes));
+  } finally {
+    localDataBytes.fill(0);
+  }
+  if (!isLocalData(localData)) throw new Error("Invalid encrypted local E2EE data");
+
+  return { filename, stateEnvelope: parsed.envelope, localData };
+}
+
+export async function hasPublishedChatKeyPackage(userId: string, chatId: string) {
+  return (await SecureStore.getItemAsync(keyPackagePublishedKey(userId, chatId))) === "1";
+}
+
+export async function markChatKeyPackagePublished(userId: string, chatId: string) {
+  await SecureStore.setItemAsync(keyPackagePublishedKey(userId, chatId), "1", secureStoreOptions());
+}
+
 export async function initializeE2eeDevice(userId: string) {
   const device = await getDeviceContext(userId);
   const existingState = await loadE2eeState(userId, "device");
@@ -110,15 +211,26 @@ export async function initializeE2eeDevice(userId: string) {
 
 export async function loadE2eeState(userId: string, chatId: string): Promise<E2eeState | null> {
   const device = await getDeviceContext(userId);
-  const filename = await SecureStore.getItemAsync(pointerKey(userId, chatId));
-  if (!filename) return null;
-
-  const uri = stateUri(userId, device.deviceId, chatId, filename);
-  const envelope = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
+  const stored = await readStateFile(userId, chatId, device);
+  if (!stored) return null;
   return {
-    envelope: base64.toByteArray(envelope),
+    envelope: base64.toByteArray(stored.stateEnvelope),
     deviceKey: device.deviceKey,
     context: contextFor(userId, device.deviceId, chatId),
+  };
+}
+
+export async function loadE2eeStateRecord(userId: string, chatId: string): Promise<E2eeStateRecord | null> {
+  const device = await getDeviceContext(userId);
+  const stored = await readStateFile(userId, chatId, device);
+  if (!stored) return null;
+  return {
+    state: {
+      envelope: base64.toByteArray(stored.stateEnvelope),
+      deviceKey: device.deviceKey,
+      context: contextFor(userId, device.deviceId, chatId),
+    },
+    localData: stored.localData,
   };
 }
 
@@ -127,7 +239,12 @@ export async function getE2eeContext(userId: string, scope: string): Promise<Uin
   return contextFor(userId, device.deviceId, scope);
 }
 
-export async function saveE2eeState(userId: string, chatId: string, state: E2eeState): Promise<void> {
+export async function saveE2eeState(
+  userId: string,
+  chatId: string,
+  state: E2eeState,
+  updatedLocalData?: E2eeLocalData,
+): Promise<void> {
   const device = await getDeviceContext(userId);
   if (state.deviceKey.length !== 32 || state.context.length === 0) {
     throw new Error("Invalid E2EE device state");
@@ -138,9 +255,21 @@ export async function saveE2eeState(userId: string, chatId: string, state: E2eeS
   }
   const version = safeFilePart(base64.fromByteArray(await E2eeNative.generateDeviceKey()));
   const uri = stateUri(userId, device.deviceId, chatId, version);
-  const previous = await SecureStore.getItemAsync(pointerKey(userId, chatId));
-  await FileSystem.writeAsStringAsync(uri, base64.fromByteArray(state.envelope), {
-    encoding: FileSystem.EncodingType.Base64,
+  const previous = await readStateFile(userId, chatId, device);
+  const localData = updatedLocalData ?? previous?.localData ?? EMPTY_LOCAL_DATA;
+  if (!isLocalData(localData)) throw new Error("Invalid local E2EE data");
+  const localDataEnvelope = await E2eeNative.protectLocalData(
+    utf8Bytes(JSON.stringify(localData)),
+    device.deviceKey.slice(),
+    localDataContext(userId, device.deviceId, chatId).slice(),
+  );
+  const stored: StateFile = {
+    version: 1,
+    envelope: base64.fromByteArray(state.envelope),
+    localDataEnvelope: base64.fromByteArray(localDataEnvelope),
+  };
+  await FileSystem.writeAsStringAsync(uri, JSON.stringify(stored), {
+    encoding: FileSystem.EncodingType.UTF8,
   });
 
   try {
@@ -151,6 +280,6 @@ export async function saveE2eeState(userId: string, chatId: string, state: E2eeS
   }
 
   if (previous) {
-    await FileSystem.deleteAsync(stateUri(userId, device.deviceId, chatId, previous), { idempotent: true });
+    await FileSystem.deleteAsync(stateUri(userId, device.deviceId, chatId, previous.filename), { idempotent: true });
   }
 }

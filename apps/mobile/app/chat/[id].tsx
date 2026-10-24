@@ -16,6 +16,11 @@ import { apiRequest } from "../../src/api/client.js";
 import { theme } from "../../src/theme.js";
 import { useAuthStore } from "../../src/stores/auth.js";
 import { useRealtimeStore } from "../../src/stores/realtime.js";
+import {
+  ensureChatE2ee,
+  encryptAndSendChatMessage,
+  fetchAndDecryptChatMessages,
+} from "../../src/crypto/session.js";
 
 export default function ChatConversationScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -40,10 +45,31 @@ export default function ChatConversationScreen() {
     refetchInterval: 5000,
   });
 
+  const chat = chatData?.chat;
+  const partnerId =
+    chat?.requesterUserId === user?.id ? chat?.recipientUserId : chat?.requesterUserId;
+
+  const e2eeQuery = useQuery({
+    queryKey: ["e2ee", id, user?.id, partnerId],
+    queryFn: () => ensureChatE2ee(user!.id, String(id), partnerId!, chat!.requesterUserId),
+    enabled: !!user?.id && !!id && !!partnerId && !!chat?.requesterUserId,
+    refetchInterval: (query) => query.state.data === "waiting" ? 3000 : false,
+  });
+
   // Fetch Messages
   const { data: messagesData, isLoading: messagesLoading } = useQuery({
     queryKey: ["messages", id],
-    queryFn: () => apiRequest<{ messages: any[] }>(`/api/v1/chats/${id}/messages`),
+    queryFn: async () => {
+      if (!user?.id) return { messages: [] };
+      const previous = queryClient.getQueryData<{ messages: any[] }>(["messages", id])?.messages || [];
+      const incoming = await fetchAndDecryptChatMessages(user.id, String(id), previous.length === 0);
+      const merged = new Map(previous.map((message) => [message.id, message]));
+      incoming.forEach((message) => merged.set(message.id, message));
+      return {
+        messages: [...merged.values()].sort((left, right) => left.seq - right.seq),
+      };
+    },
+    enabled: e2eeQuery.data === "ready" && !!user?.id,
     refetchInterval: 3000,
   });
 
@@ -82,13 +108,10 @@ export default function ChatConversationScreen() {
 
   // Mutations
   const sendMessageMutation = useMutation({
-    mutationFn: (text: string) =>
-      apiRequest(`/api/v1/chats/${id}/messages`, {
-        method: "POST",
-        body: JSON.stringify({
-          ciphertext: text,
-        }),
-      }),
+    mutationFn: (text: string) => {
+      if (!user?.id) throw new Error("Sign in to send a message");
+      return encryptAndSendChatMessage(user.id, String(id), text);
+    },
     onSuccess: () => {
       setInputText("");
       queryClient.invalidateQueries({ queryKey: ["messages", id] });
@@ -151,8 +174,8 @@ export default function ChatConversationScreen() {
           reason: reportReason,
           details: reportDetails,
           evidence: (messagesData?.messages || [])
-            .filter((message) => selectedEvidenceIds.includes(message.id))
-            .map((message) => message.ciphertext),
+            .filter((message) => selectedEvidenceIds.includes(message.id) && message.plaintext)
+            .map((message) => message.plaintext),
         }),
       }),
     onSuccess: () => {
@@ -164,17 +187,13 @@ export default function ChatConversationScreen() {
     },
   });
 
-  const chat = chatData?.chat;
   const messages = messagesData?.messages || [];
   const isProtected = chat?.mode === "PROTECTED";
   const isRestricted = chat?.isSendingRestricted;
   const isEnded = chat?.status === "ENDED";
 
-  const partnerId =
-    chat?.requesterUserId === user?.id ? chat?.recipientUserId : chat?.requesterUserId;
-
   const handleSend = () => {
-    if (!inputText.trim() || isRestricted || isEnded) return;
+    if (!inputText.trim() || isRestricted || isEnded || e2eeQuery.data !== "ready") return;
     sendMessageMutation.mutate(inputText.trim());
   };
 
@@ -228,9 +247,19 @@ export default function ChatConversationScreen() {
       ) : null}
 
       {/* Messages List */}
-      {chatLoading || messagesLoading ? (
+      {e2eeQuery.isError ? (
         <View style={styles.center}>
-          <ActivityIndicator size="large" color={theme.colors.primary} />
+          <Text style={styles.messageText}>
+            Could not set up encrypted messaging. This chat stays unavailable until encryption is ready.
+          </Text>
+        </View>
+      ) : chatLoading || e2eeQuery.data !== "ready" || messagesLoading ? (
+        <View style={styles.center}>
+          {e2eeQuery.data === "waiting" ? (
+            <Text style={styles.messageText}>Setting up encrypted messaging…</Text>
+          ) : (
+            <ActivityIndicator size="large" color={theme.colors.primary} />
+          )}
         </View>
       ) : (
         <FlatList
@@ -243,7 +272,7 @@ export default function ChatConversationScreen() {
               return (
                 <View style={styles.whisperBubble}>
                   <Text style={styles.whisperHeader}>✨ Private Angel Whisper</Text>
-                  <Text style={styles.whisperText}>{item.ciphertext}</Text>
+                  <Text style={styles.whisperText}>Whisper encryption is not ready on this device.</Text>
                   <Text style={styles.whisperTime}>
                     {new Date(item.createdAt).toLocaleTimeString([], {
                       hour: "2-digit",
@@ -262,7 +291,7 @@ export default function ChatConversationScreen() {
                   isMine ? styles.myMessage : styles.partnerMessage,
                 ]}
               >
-                <Text style={styles.messageText}>{item.ciphertext}</Text>
+                <Text style={styles.messageText}>{item.plaintext || "Message unavailable"}</Text>
                 <Text style={styles.messageTime}>
                   {new Date(item.createdAt).toLocaleTimeString([], {
                     hour: "2-digit",
@@ -304,7 +333,7 @@ export default function ChatConversationScreen() {
                 (!inputText.trim() || sendMessageMutation.isPending) && styles.sendBtnDisabled,
               ]}
               onPress={handleSend}
-              disabled={!inputText.trim() || sendMessageMutation.isPending}
+              disabled={!inputText.trim() || sendMessageMutation.isPending || e2eeQuery.data !== "ready"}
             >
               <Text style={styles.sendBtnText}>Send</Text>
             </TouchableOpacity>
@@ -449,7 +478,7 @@ export default function ChatConversationScreen() {
                   >
                     <Text style={styles.evidenceCheck}>{selected ? "☑" : "☐"}</Text>
                     <Text style={styles.evidenceText} numberOfLines={2}>
-                      {message.ciphertext}
+                      {message.plaintext || "Message unavailable"}
                     </Text>
                   </TouchableOpacity>
                 );

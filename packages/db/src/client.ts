@@ -161,6 +161,7 @@ export async function initDbSchema(db: DB) {
       "id" text PRIMARY KEY,
       "chat_id" text NOT NULL REFERENCES "chat"("id") ON DELETE CASCADE,
       "sender_id" text NOT NULL REFERENCES "user"("id") ON DELETE CASCADE,
+      "client_msg_id" text,
       "ciphertext" text NOT NULL,
       "encryption_metadata" jsonb,
       "seq" integer NOT NULL,
@@ -175,7 +176,9 @@ export async function initDbSchema(db: DB) {
       "identity" text NOT NULL,
       "signature_key" text NOT NULL,
       "key_package" text NOT NULL,
+      "claimed_by_device_id" text,
       "consumed_at" timestamp,
+      "consumed_by_client_msg_id" text,
       "created_at" timestamp NOT NULL DEFAULT now()
     );`,
     `CREATE TABLE IF NOT EXISTS "whisper" (
@@ -284,8 +287,12 @@ export async function initDbSchema(db: DB) {
     `ALTER TABLE "contact_request" ADD COLUMN IF NOT EXISTS "requester_approval_threshold" text NOT NULL DEFAULT 'ANY_ONE';`,
     `ALTER TABLE "contact_request" ADD COLUMN IF NOT EXISTS "recipient_approval_threshold" text NOT NULL DEFAULT 'ANY_ONE';`,
     `ALTER TABLE "chat" ADD COLUMN IF NOT EXISTS "purpose" text NOT NULL DEFAULT 'Other';`,
+    `ALTER TABLE "message" ADD COLUMN IF NOT EXISTS "client_msg_id" text;`,
     `CREATE UNIQUE INDEX IF NOT EXISTS "message_chat_seq_unique" ON "message" ("chat_id", "seq");`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "message_sender_client_id_unique" ON "message" ("sender_id", "client_msg_id");`,
     `CREATE UNIQUE INDEX IF NOT EXISTS "crypto_key_package_scope_device_unique" ON "crypto_key_package" ("chat_id", "user_id", "device_id", "scope");`,
+    `ALTER TABLE "crypto_key_package" ADD COLUMN IF NOT EXISTS "claimed_by_device_id" text;`,
+    `ALTER TABLE "crypto_key_package" ADD COLUMN IF NOT EXISTS "consumed_by_client_msg_id" text;`,
     `CREATE TABLE IF NOT EXISTS "push_token" (
       "id" text PRIMARY KEY,
       "user_id" text NOT NULL REFERENCES "user"("id") ON DELETE CASCADE,

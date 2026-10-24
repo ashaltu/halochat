@@ -1077,6 +1077,7 @@ angelsRouter.post("/angel/chats/:id/whispers", async (c) => {
     angelUserId: angel.id,
     toUserId: protectedUserId,
     ciphertext: parseResult.data.ciphertext,
+    encryptionMetadata: parseResult.data.encryptionMetadata,
     createdAt: new Date().toISOString(),
   };
 

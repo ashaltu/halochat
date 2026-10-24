@@ -726,6 +726,18 @@ mod tests {
     }
 
     #[test]
+    fn sender_state_does_not_replay_its_own_application_message() {
+        let (alice_device, _) = create_device(b"alice/device-1").unwrap();
+        let (bob_device, bob_key_package) = create_device(b"bob/device-1").unwrap();
+        let alice_group = create_group(&alice_device, b"sender-replay-check").unwrap();
+        let bob_member = device_identity(&bob_device).unwrap();
+        let added = add_member(&alice_group, &bob_key_package, &bob_member).unwrap();
+        let (alice_after_send, ciphertext) = encrypt_application(&added.state, b"hello").unwrap();
+
+        assert!(decrypt_application(&alice_after_send, &ciphertext).is_err());
+    }
+
+    #[test]
     fn rejects_invalid_state_and_incomplete_operations() {
         assert!(create_device(b"").is_err());
         assert!(create_group(b"not-json", b"group").is_err());

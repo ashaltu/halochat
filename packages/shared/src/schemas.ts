@@ -102,13 +102,32 @@ export const AngelContactDecisionSchema = z.object({
 });
 
 // Chat & Message Schemas
-export const SendMessageSchema = z.object({
-  ciphertext: z.string().min(1, "Message content cannot be empty"),
-  encryptionMetadata: z.record(z.unknown()).optional(),
-  clientMsgId: z.string().optional(),
+const BASE64_BYTES = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+
+const MlsEnvelopeMetadataSchema = z.object({
+  protocol: z.literal("MLS"),
+  version: z.literal(1),
+  kind: z.enum(["welcome", "application", "commit"]),
+}).passthrough().superRefine((metadata, context) => {
+  if (metadata.kind === "welcome") {
+    if (typeof metadata.keyPackageId !== "string" || metadata.keyPackageId.length < 1 || metadata.keyPackageId.length > 120) {
+      context.addIssue({ code: "custom", path: ["keyPackageId"], message: "A claimed KeyPackage ID is required" });
+    }
+    if (typeof metadata.claimantDeviceId !== "string" || !/^[A-Za-z0-9+/=_-]{20,80}$/.test(metadata.claimantDeviceId)) {
+      context.addIssue({ code: "custom", path: ["claimantDeviceId"], message: "A valid claimant device ID is required" });
+    }
+  }
 });
 
-const BASE64_BYTES = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+export const SendMessageSchema = z.object({
+  ciphertext: z.string().min(1, "Encrypted message content cannot be empty").regex(BASE64_BYTES),
+  encryptionMetadata: MlsEnvelopeMetadataSchema,
+  clientMsgId: z.string().min(1).max(80).optional(),
+}).superRefine((message, context) => {
+  if (message.encryptionMetadata.kind === "welcome" && !message.clientMsgId) {
+    context.addIssue({ code: "custom", path: ["clientMsgId"], message: "Welcome messages need an idempotency key" });
+  }
+});
 
 export const PublishChatKeyPackageSchema = z.object({
   deviceId: z.string().min(20).max(80),
@@ -118,9 +137,13 @@ export const PublishChatKeyPackageSchema = z.object({
 });
 
 export const SendWhisperSchema = z.object({
-  ciphertext: z.string().min(1),
-  encryptionMetadata: z.record(z.unknown()).optional(),
-  plaintextCharLength: z.number().max(50, "Whispers are limited to 50 characters").optional(),
+  ciphertext: z.string().min(1).regex(BASE64_BYTES),
+  encryptionMetadata: z.object({
+    protocol: z.literal("MLS"),
+    version: z.literal(1),
+    kind: z.literal("whisper"),
+  }).passthrough(),
+  plaintextCharLength: z.number().int().min(0).max(50, "Whispers are limited to 50 characters"),
 });
 
 export const ChatAccessRequestSchema = z.object({

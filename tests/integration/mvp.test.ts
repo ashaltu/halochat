@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { createApp } from "../../apps/server/src/app.js";
-import { closeDb, getDb, initDbSchema, users } from "@halochat/db";
+import { closeDb, eq, getDb, initDbSchema, messages, users } from "@halochat/db";
 import {
   ApprovalThreshold,
   ChatMode,
@@ -43,6 +43,13 @@ describe("HaloChat MVP Integration Tests", () => {
 
     const data = await res.json().catch(() => ({}));
     return { status: res.status, body: data };
+  }
+
+  function encryptedFixture(text: string, kind: "application" | "whisper" = "application") {
+    return {
+      ciphertext: Buffer.from(text, "utf8").toString("base64"),
+      encryptionMetadata: { protocol: "MLS", version: 1, kind },
+    };
   }
 
   let adminToken: string;
@@ -328,6 +335,7 @@ describe("HaloChat MVP Integration Tests", () => {
 
   describe("4. Chat Messaging & Monotonic Sequence (D11, §8.4)", () => {
     let chatId: string;
+    let claimedPackageId: string;
 
     beforeAll(async () => {
       const res = await api("/api/v1/chats", { token: aishaToken });
@@ -367,7 +375,7 @@ describe("HaloChat MVP Integration Tests", () => {
         expect(mismatch.body.code).toBe("INVALID_DEVICE_IDENTITY");
       });
 
-      it("allows only the peer to claim a KeyPackage and consumes it once", async () => {
+      it("allows only one peer device to claim a KeyPackage and keeps same-device retries recoverable", async () => {
         const published = await api(`/api/v1/chats/${chatId}/crypto/key-packages`, {
           method: "POST",
           token: aishaToken,
@@ -386,18 +394,20 @@ describe("HaloChat MVP Integration Tests", () => {
         expect(selfFetch.status).toBe(404);
 
         const claims = await Promise.all([
-          api(`/api/v1/chats/${chatId}/crypto/key-packages/${aishaId}`, { token: omarToken }),
-          api(`/api/v1/chats/${chatId}/crypto/key-packages/${aishaId}`, { token: omarToken }),
+          api(`/api/v1/chats/${chatId}/crypto/key-packages/${aishaId}?deviceId=${omarDeviceId}`, { token: omarToken }),
+          api(`/api/v1/chats/${chatId}/crypto/key-packages/${aishaId}?deviceId=${omarDeviceId}`, { token: omarToken }),
         ]);
-        expect(claims.map((claim) => claim.status).sort()).toEqual([200, 409]);
-        const claimed = claims.find((claim) => claim.status === 200)!;
+        expect(claims.map((claim) => claim.status)).toEqual([200, 200]);
+        const claimed = claims[0];
+        claimedPackageId = claimed.body.keyPackage.keyPackageId;
         expect(claimed.body.keyPackage).toMatchObject({
           userId: aishaId,
           deviceId: aishaDeviceId,
           signatureKey: publicKey,
           keyPackage,
         });
-        const rejected = claims.find((claim) => claim.status === 409)!;
+        const rejected = await api(`/api/v1/chats/${chatId}/crypto/key-packages/${aishaId}?deviceId=device_other_0123456789`, { token: omarToken });
+        expect(rejected.status).toBe(409);
         expect(rejected.body.code).toBe("KEY_PACKAGE_UNAVAILABLE");
       });
 
@@ -409,26 +419,99 @@ describe("HaloChat MVP Integration Tests", () => {
       });
     });
 
-    it("Omar sends message -> seq 1", async () => {
+    it("rejects plaintext message bodies", async () => {
       const res = await api(`/api/v1/chats/${chatId}/messages`, {
         method: "POST",
         token: omarToken,
-        body: { ciphertext: "Hello Aisha, I would like to discuss business." },
+        body: { ciphertext: "this is plaintext" },
+      });
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe("VALIDATION_ERROR");
+    });
+
+    it("Omar sends message -> seq 1", async () => {
+      const body = {
+        ...encryptedFixture("Hello Aisha, I would like to discuss business."),
+        clientMsgId: `${chatId}-omar-seq1`,
+      };
+      const res = await api(`/api/v1/chats/${chatId}/messages`, {
+        method: "POST",
+        token: omarToken,
+        body,
       });
 
       expect(res.status).toBe(201);
       expect(res.body.message.seq).toBe(1);
+      const db = await getDb();
+      const [storedMessage] = await db.select().from(messages).where(eq(messages.clientMsgId, body.clientMsgId));
+      expect(storedMessage.ciphertext).toBe(body.ciphertext);
+      expect(storedMessage.chatId).toBe(chatId);
+      expect(storedMessage.senderId).toBe(omarId);
+      expect(storedMessage.encryptionMetadata).toEqual(body.encryptionMetadata);
+
+      const retry = await api(`/api/v1/chats/${chatId}/messages`, {
+        method: "POST",
+        token: omarToken,
+        body,
+      });
+      expect(retry.body.code).not.toBe("CLIENT_MESSAGE_ID_REUSED");
+      expect(retry.status).toBe(200);
+      expect(retry.body.message.id).toBe(res.body.message.id);
+
+      const reusedId = await api(`/api/v1/chats/${chatId}/messages`, {
+        method: "POST",
+        token: omarToken,
+        body: { ...body, ...encryptedFixture("different ciphertext") },
+      });
+      expect(reusedId.status).toBe(409);
+      expect(reusedId.body.code).toBe("CLIENT_MESSAGE_ID_REUSED");
     });
 
     it("Aisha replies -> seq 2", async () => {
       const res = await api(`/api/v1/chats/${chatId}/messages`, {
         method: "POST",
         token: aishaToken,
-        body: { ciphertext: "Hi Omar, sure, please share details." },
+        body: encryptedFixture("Hi Omar, sure, please share details."),
       });
 
       expect(res.status).toBe(201);
       expect(res.body.message.seq).toBe(2);
+    });
+
+    it("consumes the claimed KeyPackage with its durable Welcome idempotency key", async () => {
+      const body = {
+        ...encryptedFixture("MLS Welcome", "application"),
+        clientMsgId: `${chatId}-welcome`,
+        encryptionMetadata: {
+          protocol: "MLS",
+          version: 1,
+          kind: "welcome",
+          keyPackageId: claimedPackageId,
+          claimantDeviceId: "device_omar_0123456789",
+        },
+      };
+      const sent = await api(`/api/v1/chats/${chatId}/messages`, {
+        method: "POST",
+        token: omarToken,
+        body,
+      });
+      expect(sent.status, JSON.stringify(sent.body)).toBe(201);
+
+      const retry = await api(`/api/v1/chats/${chatId}/messages`, {
+        method: "POST",
+        token: omarToken,
+        body,
+      });
+      expect(retry.status).toBe(200);
+      expect(retry.body.message.id).toBe(sent.body.message.id);
+
+      const reused = await api(`/api/v1/chats/${chatId}/messages`, {
+        method: "POST",
+        token: omarToken,
+        body: { ...body, clientMsgId: `${chatId}-welcome-replay` },
+      });
+      expect(reused.status).toBe(409);
+      expect(reused.body.code).toBe("KEY_PACKAGE_CLAIM_INVALID");
     });
   });
 
@@ -440,12 +523,19 @@ describe("HaloChat MVP Integration Tests", () => {
       chatId = res.body.chats[0].id;
     });
 
-    it("Fatima whispers to Aisha (≤50 characters)", async () => {
+    it("rejects plaintext Whispers and accepts an encrypted Whisper envelope", async () => {
+      const plaintext = await api(`/api/v1/angel/chats/${chatId}/whispers`, {
+        method: "POST",
+        token: fatimaToken,
+        body: { ciphertext: "do not store this plaintext" },
+      });
+      expect(plaintext.status).toBe(400);
+
       const res = await api(`/api/v1/angel/chats/${chatId}/whispers`, {
         method: "POST",
         token: fatimaToken,
         body: {
-          ciphertext: "Be careful with payment terms.",
+          ...encryptedFixture("Be careful with payment terms.", "whisper"),
           plaintextCharLength: 30,
         },
       });
@@ -465,7 +555,7 @@ describe("HaloChat MVP Integration Tests", () => {
       const sendRes = await api(`/api/v1/chats/${chatId}/messages`, {
         method: "POST",
         token: aishaToken,
-        body: { ciphertext: "Sending while restricted" },
+        body: encryptedFixture("Sending while restricted"),
       });
       expect(sendRes.status).toBe(409);
       expect(sendRes.body.code).toBe("SENDING_RESTRICTED");
@@ -474,7 +564,7 @@ describe("HaloChat MVP Integration Tests", () => {
       const omarSend = await api(`/api/v1/chats/${chatId}/messages`, {
         method: "POST",
         token: omarToken,
-        body: { ciphertext: "Are you still there?" },
+        body: encryptedFixture("Are you still there?"),
       });
       expect(omarSend.status).toBe(201);
     });
@@ -490,7 +580,7 @@ describe("HaloChat MVP Integration Tests", () => {
       const sendRes = await api(`/api/v1/chats/${chatId}/messages`, {
         method: "POST",
         token: aishaToken,
-        body: { ciphertext: "Yes, I am here." },
+        body: encryptedFixture("Yes, I am here."),
       });
       expect(sendRes.status).toBe(201);
     });
@@ -533,10 +623,11 @@ describe("HaloChat MVP Integration Tests", () => {
 
     it("Messages sent while Fatima is absent are masked by history gap upon rejoin (D6)", async () => {
       // Message exchanged while Fatima is gone
+      const hiddenMessage = encryptedFixture("Private message while Angel absent");
       await api(`/api/v1/chats/${chatId}/messages`, {
         method: "POST",
         token: omarToken,
-        body: { ciphertext: "Private message while Angel absent" },
+        body: hiddenMessage,
       });
 
       // Aisha requests Fatima to rejoin
@@ -555,6 +646,19 @@ describe("HaloChat MVP Integration Tests", () => {
         token: fatimaToken,
       });
 
+      const db = await getDb();
+      const chatMessages = await db.select().from(messages).where(eq(messages.chatId, chatId));
+      const welcomeId = `welcome-${chatId}`;
+      await db.insert(messages).values({
+        id: welcomeId,
+        chatId,
+        senderId: omarId,
+        ciphertext: Buffer.from("participant-only welcome").toString("base64"),
+        encryptionMetadata: { protocol: "MLS", version: 1, kind: "welcome" },
+        seq: Math.max(0, ...chatMessages.map((message) => message.seq)) + 1,
+        createdAt: new Date(),
+      });
+
       // Fatima inspects messages
       const timelineRes = await api(`/api/v1/angel/chats/${chatId}/messages`, {
         token: fatimaToken,
@@ -565,13 +669,14 @@ describe("HaloChat MVP Integration Tests", () => {
 
       // Ensure the message during absence is NOT visible to Fatima!
       const secretMsg = timeline.find(
-        (t: any) => t.ciphertext === "Private message while Angel absent"
+        (t: any) => t.ciphertext === hiddenMessage.ciphertext
       );
       expect(secretMsg).toBeUndefined();
 
       // Ensure gap notice exists
       const gapNotice = timeline.find((t: any) => t.isGapNotice === true);
       expect(gapNotice).toBeDefined();
+      expect(timeline.some((item: any) => item.id === welcomeId)).toBe(false);
     });
   });
 

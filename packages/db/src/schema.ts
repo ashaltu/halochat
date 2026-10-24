@@ -179,11 +179,15 @@ export const messages = pgTable("message", {
   senderId: text("sender_id")
     .notNull()
     .references(() => users.id, { onDelete: "cascade" }),
+  clientMsgId: text("client_msg_id"),
   ciphertext: text("ciphertext").notNull(),
   encryptionMetadata: jsonb("encryption_metadata"),
   seq: integer("seq").notNull(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
-}, (table) => [uniqueIndex("message_chat_seq_unique").on(table.chatId, table.seq)]);
+}, (table) => [
+  uniqueIndex("message_chat_seq_unique").on(table.chatId, table.seq),
+  uniqueIndex("message_sender_client_id_unique").on(table.senderId, table.clientMsgId),
+]);
 
 export const cryptoKeyPackages = pgTable("crypto_key_package", {
   id: text("id").primaryKey(),
@@ -198,7 +202,9 @@ export const cryptoKeyPackages = pgTable("crypto_key_package", {
   identity: text("identity").notNull(),
   signatureKey: text("signature_key").notNull(),
   keyPackage: text("key_package").notNull(),
+  claimedByDeviceId: text("claimed_by_device_id"),
   consumedAt: timestamp("consumed_at"),
+  consumedByClientMsgId: text("consumed_by_client_msg_id"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (table) => [
   uniqueIndex("crypto_key_package_scope_device_unique").on(table.chatId, table.userId, table.deviceId, table.scope),

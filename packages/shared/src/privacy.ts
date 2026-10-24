@@ -24,6 +24,12 @@ export interface TimelineGapNotice {
 
 export type TimelineItem = MessageRecord | TimelineGapNotice;
 
+export function isParticipantOnlyMessage(metadata: unknown): boolean {
+  if (!metadata || typeof metadata !== "object") return false;
+  const envelope = metadata as Record<string, unknown>;
+  return envelope.protocol === "MLS" && envelope.version === 1 && envelope.kind === "welcome";
+}
+
 /**
  * Filters message history for an Angel based on their authorized access periods (D6).
  * Inserts timeline notices for gaps when access was inactive.
@@ -68,6 +74,7 @@ export function filterMessagesForAngel(
 
     // Filter messages belonging to this authorized period
     const periodMessages = messages.filter((msg) => {
+      if (isParticipantOnlyMessage(msg.encryptionMetadata)) return false;
       const msgTime = new Date(msg.createdAt).getTime();
       return msgTime >= fromTime && msgTime <= untilTime;
     });
