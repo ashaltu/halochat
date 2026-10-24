@@ -2,6 +2,7 @@
   "name": "@halochat/e2ee-native",
   "version": "0.1.0",
   "private": true,
+  "license": "BSD-3-Clause",
   "main": "src/index",
   "react-native": "src/index.ts",
   "browser": "src/index.web.ts",

@@ -2,7 +2,7 @@
   "name": "@halochat/server",
   "version": "1.0.0",
   "private": true,
-  "license": "UNLICENSED",
+  "license": "BSD-3-Clause",
   "type": "module",
   "main": "./dist/index.js",
   "scripts": {

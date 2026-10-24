@@ -2,7 +2,7 @@
   "name": "@halochat/support",
   "version": "1.0.0",
   "private": true,
-  "license": "UNLICENSED",
+  "license": "BSD-3-Clause",
   "type": "module",
   "scripts": {
     "dev": "vite --port 3001",

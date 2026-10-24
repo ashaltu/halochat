@@ -2,7 +2,7 @@
   "name": "halochat-monorepo",
   "version": "1.0.0",
   "private": true,
-  "license": "UNLICENSED",
+  "license": "BSD-3-Clause",
   "packageManager": "pnpm@10.6.5",
   "scripts": {
     "build": "pnpm --filter \"@halochat/*\" run build",

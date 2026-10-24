@@ -2,6 +2,7 @@
 name = "halochat-e2ee-core"
 version = "0.1.0"
 edition = "2021"
+license = "BSD-3-Clause"
 publish = false
 
 [lib]

@@ -59,8 +59,4 @@ make dev-support
 
 ## License
 
-**Proprietary and Confidential.**
-
-Copyright © 2026 HaloChat. All rights reserved.
-
-This software and associated documentation files are the proprietary and confidential property of HaloChat. Unauthorized copying, distribution, modification, public display, or reverse engineering of this software, via any medium, is strictly prohibited.
+This project is licensed under the [BSD 3-Clause License](LICENSE).

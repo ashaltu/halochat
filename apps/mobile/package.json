@@ -2,7 +2,7 @@
   "name": "@halochat/mobile",
   "version": "1.0.0",
   "private": true,
-  "license": "UNLICENSED",
+  "license": "BSD-3-Clause",
   "main": "expo-router/entry",
   "scripts": {
     "build": "tsc --noEmit",
