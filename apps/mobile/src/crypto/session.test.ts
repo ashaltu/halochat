@@ -147,6 +147,50 @@ describe("Whisper device credentials", () => {
     expect(stateStore.saveE2eeState).toHaveBeenCalledOnce();
   });
 
+  it("rejects a participant Welcome that contains an extra MLS member", async () => {
+    const peerIdentity = "halochat:user:requester:device:requester-device";
+    const localIdentity = "halochat:user:recipient:device:angel-device";
+    const rogueIdentity = "halochat:user:attacker:device:attacker-device";
+    const bytes = (value: string) => Uint8Array.from(value, (char) => char.charCodeAt(0));
+    const peerIdentityBytes = bytes(peerIdentity);
+    const localIdentityBytes = bytes(localIdentity);
+    const peerSignatureKey = new Uint8Array([2]);
+    const localSignatureKey = new Uint8Array([1]);
+    apiRequest
+      .mockResolvedValueOnce({
+        messages: [{
+          id: "welcome",
+          chatId: "chat-id",
+          senderId: "requester",
+          ciphertext: base64.fromByteArray(new Uint8Array([6])),
+          encryptionMetadata: { protocol: "MLS", version: 1, kind: "welcome" },
+          seq: 1,
+          createdAt: "2026-01-01T00:00:00.000Z",
+        }],
+      })
+      .mockResolvedValueOnce({
+        devices: [{
+          deviceId: "requester-device",
+          identity: base64.fromByteArray(peerIdentityBytes),
+          signatureKey: base64.fromByteArray(peerSignatureKey),
+          signatureProof: base64.fromByteArray(new Uint8Array([3])),
+        }],
+      });
+    native.verifyDeviceBinding.mockResolvedValue(true);
+    native.joinGroup.mockResolvedValue(new Uint8Array([7]));
+    native.deviceIdentity.mockResolvedValue({ identity: localIdentityBytes, signatureKey: localSignatureKey });
+    native.groupMembers.mockResolvedValue([
+      { identity: localIdentityBytes, signatureKey: localSignatureKey },
+      { identity: peerIdentityBytes, signatureKey: peerSignatureKey },
+      { identity: bytes(rogueIdentity), signatureKey: new Uint8Array([4]) },
+    ]);
+
+    await expect(ensureChatE2ee("recipient", "chat-id", "requester", "requester"))
+      .rejects.toThrow("MLS Welcome has an unexpected device roster");
+
+    expect(stateStore.saveE2eeState).not.toHaveBeenCalled();
+  });
+
   it("queues encrypted Angel copies once per source message and retries them idempotently", async () => {
     let record: any = {
       state: { revision: 0 },
