@@ -4,13 +4,13 @@ use zeroize::Zeroizing;
 
 #[derive(Debug, uniffi::Error)]
 pub enum E2eeError {
-    Operation { message: String },
+    Operation { reason: String },
 }
 
 impl Display for E2eeError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Operation { message } => formatter.write_str(message),
+            Self::Operation { reason } => formatter.write_str(reason),
         }
     }
 }
@@ -18,13 +18,19 @@ impl Display for E2eeError {
 impl std::error::Error for E2eeError {}
 
 impl From<String> for E2eeError {
-    fn from(message: String) -> Self {
-        Self::Operation { message }
+    fn from(reason: String) -> Self {
+        Self::Operation { reason }
     }
 }
 
 #[derive(uniffi::Record)]
 pub struct DeviceResult {
+    pub state: Vec<u8>,
+    pub key_package: Vec<u8>,
+}
+
+#[derive(uniffi::Record)]
+pub struct KeyPackageResult {
     pub state: Vec<u8>,
     pub key_package: Vec<u8>,
 }
@@ -94,6 +100,13 @@ pub fn e2ee_group_members(state: Vec<u8>) -> Result<Vec<ExpectedMember>, E2eeErr
 pub fn e2ee_create_device(identity: Vec<u8>) -> Result<DeviceResult, E2eeError> {
     let (state, key_package) = super::create_device(&identity)?;
     Ok(DeviceResult { state, key_package })
+}
+
+#[uniffi::export]
+pub fn e2ee_create_key_package(state: Vec<u8>) -> Result<KeyPackageResult, E2eeError> {
+    let state = Zeroizing::new(state);
+    let (state, key_package) = super::create_key_package(&state)?;
+    Ok(KeyPackageResult { state, key_package })
 }
 
 #[uniffi::export]
@@ -170,10 +183,11 @@ mod tests {
     fn exported_api_round_trips_group_messages_and_state_protection() {
         let alice = e2ee_create_device(b"alice/device-1".to_vec()).unwrap();
         let bob = e2ee_create_device(b"bob/device-1".to_vec()).unwrap();
+        let bob_key_package = e2ee_create_key_package(bob.state.clone()).unwrap();
         let alice_group = e2ee_create_group(alice.state, b"ffi-group".to_vec()).unwrap();
         let bob_member = e2ee_device_identity(bob.state.clone()).unwrap();
-        let added = e2ee_add_member(alice_group, bob.key_package, bob_member).unwrap();
-        let bob_group = e2ee_join_group(bob.state, added.welcome).unwrap();
+        let added = e2ee_add_member(alice_group, bob_key_package.key_package, bob_member).unwrap();
+        let bob_group = e2ee_join_group(bob_key_package.state, added.welcome).unwrap();
 
         let sent = e2ee_encrypt_application(added.state, b"ffi message".to_vec()).unwrap();
         let received = e2ee_decrypt_application(bob_group, sent.message).unwrap();

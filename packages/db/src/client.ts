@@ -166,6 +166,18 @@ export async function initDbSchema(db: DB) {
       "seq" integer NOT NULL,
       "created_at" timestamp NOT NULL DEFAULT now()
     );`,
+    `CREATE TABLE IF NOT EXISTS "crypto_key_package" (
+      "id" text PRIMARY KEY,
+      "chat_id" text NOT NULL REFERENCES "chat"("id") ON DELETE CASCADE,
+      "user_id" text NOT NULL REFERENCES "user"("id") ON DELETE CASCADE,
+      "device_id" text NOT NULL,
+      "scope" text NOT NULL DEFAULT 'PARTICIPANT',
+      "identity" text NOT NULL,
+      "signature_key" text NOT NULL,
+      "key_package" text NOT NULL,
+      "consumed_at" timestamp,
+      "created_at" timestamp NOT NULL DEFAULT now()
+    );`,
     `CREATE TABLE IF NOT EXISTS "whisper" (
       "id" text PRIMARY KEY,
       "chat_id" text NOT NULL REFERENCES "chat"("id") ON DELETE CASCADE,
@@ -273,6 +285,7 @@ export async function initDbSchema(db: DB) {
     `ALTER TABLE "contact_request" ADD COLUMN IF NOT EXISTS "recipient_approval_threshold" text NOT NULL DEFAULT 'ANY_ONE';`,
     `ALTER TABLE "chat" ADD COLUMN IF NOT EXISTS "purpose" text NOT NULL DEFAULT 'Other';`,
     `CREATE UNIQUE INDEX IF NOT EXISTS "message_chat_seq_unique" ON "message" ("chat_id", "seq");`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "crypto_key_package_scope_device_unique" ON "crypto_key_package" ("chat_id", "user_id", "device_id", "scope");`,
     `CREATE TABLE IF NOT EXISTS "push_token" (
       "id" text PRIMARY KEY,
       "user_id" text NOT NULL REFERENCES "user"("id") ON DELETE CASCADE,

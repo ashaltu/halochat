@@ -334,6 +334,81 @@ describe("HaloChat MVP Integration Tests", () => {
       chatId = res.body.chats[0].id;
     });
 
+    describe("participant KeyPackage delivery", () => {
+      const omarDeviceId = "device_omar_0123456789";
+      const aishaDeviceId = "device_aisha_01234567";
+      const publicKey = Buffer.alloc(32, 7).toString("base64");
+      const keyPackage = Buffer.alloc(64, 9).toString("base64");
+
+      it("binds published KeyPackages to the authenticated device identity", async () => {
+        const res = await api(`/api/v1/chats/${chatId}/crypto/key-packages`, {
+          method: "POST",
+          token: omarToken,
+          body: {
+            deviceId: omarDeviceId,
+            identity: Buffer.from(`halochat:user:${omarId}:device:${omarDeviceId}`).toString("base64"),
+            signatureKey: publicKey,
+            keyPackage,
+          },
+        });
+        expect(res.status).toBe(200);
+
+        const mismatch = await api(`/api/v1/chats/${chatId}/crypto/key-packages`, {
+          method: "POST",
+          token: omarToken,
+          body: {
+            deviceId: omarDeviceId,
+            identity: Buffer.from("halochat:user:someone-else:device:device_omar_0123456789").toString("base64"),
+            signatureKey: publicKey,
+            keyPackage,
+          },
+        });
+        expect(mismatch.status).toBe(400);
+        expect(mismatch.body.code).toBe("INVALID_DEVICE_IDENTITY");
+      });
+
+      it("allows only the peer to claim a KeyPackage and consumes it once", async () => {
+        const published = await api(`/api/v1/chats/${chatId}/crypto/key-packages`, {
+          method: "POST",
+          token: aishaToken,
+          body: {
+            deviceId: aishaDeviceId,
+            identity: Buffer.from(`halochat:user:${aishaId}:device:${aishaDeviceId}`).toString("base64"),
+            signatureKey: publicKey,
+            keyPackage,
+          },
+        });
+        expect(published.status).toBe(200);
+
+        const selfFetch = await api(`/api/v1/chats/${chatId}/crypto/key-packages/${omarId}`, {
+          token: omarToken,
+        });
+        expect(selfFetch.status).toBe(404);
+
+        const claims = await Promise.all([
+          api(`/api/v1/chats/${chatId}/crypto/key-packages/${aishaId}`, { token: omarToken }),
+          api(`/api/v1/chats/${chatId}/crypto/key-packages/${aishaId}`, { token: omarToken }),
+        ]);
+        expect(claims.map((claim) => claim.status).sort()).toEqual([200, 409]);
+        const claimed = claims.find((claim) => claim.status === 200)!;
+        expect(claimed.body.keyPackage).toMatchObject({
+          userId: aishaId,
+          deviceId: aishaDeviceId,
+          signatureKey: publicKey,
+          keyPackage,
+        });
+        const rejected = claims.find((claim) => claim.status === 409)!;
+        expect(rejected.body.code).toBe("KEY_PACKAGE_UNAVAILABLE");
+      });
+
+      it("does not disclose packages to non-participants", async () => {
+        const res = await api(`/api/v1/chats/${chatId}/crypto/key-packages/${aishaId}`, {
+          token: fatimaToken,
+        });
+        expect(res.status).toBe(404);
+      });
+    });
+
     it("Omar sends message -> seq 1", async () => {
       const res = await api(`/api/v1/chats/${chatId}/messages`, {
         method: "POST",

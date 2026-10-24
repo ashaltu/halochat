@@ -13,6 +13,12 @@
     "plugins": [
       "expo-router",
       "expo-notifications"
-    ]
+    ],
+    "android": {
+      "package": "com.ashaltu.halochat"
+    },
+    "ios": {
+      "bundleIdentifier": "com.ashaltu.halochat"
+    }
   }
 }

@@ -108,6 +108,15 @@ export const SendMessageSchema = z.object({
   clientMsgId: z.string().optional(),
 });
 
+const BASE64_BYTES = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+
+export const PublishChatKeyPackageSchema = z.object({
+  deviceId: z.string().min(20).max(80),
+  identity: z.string().min(8).max(256).regex(BASE64_BYTES),
+  signatureKey: z.string().min(40).max(128).regex(BASE64_BYTES),
+  keyPackage: z.string().min(64).max(16_384).regex(BASE64_BYTES),
+});
+
 export const SendWhisperSchema = z.object({
   ciphertext: z.string().min(1),
   encryptionMetadata: z.record(z.unknown()).optional(),
@@ -196,5 +205,6 @@ export type UpdateAngelScopeInput = z.infer<typeof UpdateAngelScopeSchema>;
 export type ProtectionSettingsInput = z.infer<typeof ProtectionSettingsSchema>;
 export type CreateContactRequestInput = z.infer<typeof CreateContactRequestSchema>;
 export type SendMessageInput = z.infer<typeof SendMessageSchema>;
+export type PublishChatKeyPackageInput = z.infer<typeof PublishChatKeyPackageSchema>;
 export type SendWhisperInput = z.infer<typeof SendWhisperSchema>;
 export type ProfileCorrectionRequestInput = z.infer<typeof ProfileCorrectionRequestSchema>;

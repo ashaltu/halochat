@@ -1,0 +1,31 @@
+buildscript {
+  repositories {
+    google()
+    mavenCentral()
+  }
+}
+
+apply plugin: 'com.android.library'
+apply plugin: 'org.jetbrains.kotlin.android'
+
+group = 'expo.modules.halochate2ee'
+version = '0.1.0'
+
+android {
+  namespace 'expo.modules.halochate2ee'
+  compileSdkVersion = rootProject.ext.compileSdkVersion
+
+  defaultConfig {
+    minSdkVersion rootProject.ext.minSdkVersion
+    targetSdkVersion rootProject.ext.targetSdkVersion
+  }
+
+  sourceSets {
+    main.jniLibs.srcDirs = ['src/main/jniLibs']
+  }
+}
+
+dependencies {
+  implementation project(':expo-modules-core')
+  implementation 'net.java.dev.jna:jna:5.13.0@aar'
+}

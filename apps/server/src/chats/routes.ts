@@ -5,6 +5,7 @@ import {
   users,
   chats,
   messages,
+  cryptoKeyPackages,
   chatAngelAccess,
   angelAssignments,
   angelSendRestrictions,
@@ -24,6 +25,7 @@ import {
   ChatMode,
   ChatStatus,
   SendMessageSchema,
+  PublishChatKeyPackageSchema,
   ChatAccessRequestSchema,
   ChatAngelInvitationSchema,
   sanitizeChatForParticipant,
@@ -192,6 +194,104 @@ chatsRouter.get("/:id", async (c) => {
   );
 
   return c.json({ chat: sanitized });
+});
+
+chatsRouter.post("/:id/crypto/key-packages", async (c) => {
+  const currentUser = c.get("user");
+  const chatId = c.req.param("id");
+  const body = await c.req.json().catch(() => ({}));
+  const parsed = PublishChatKeyPackageSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ code: "VALIDATION_ERROR", errors: parsed.error.flatten().fieldErrors }, 400);
+  }
+
+  const db = await getDb();
+  const [chat] = await db.select().from(chats).where(eq(chats.id, chatId)).limit(1);
+  if (!chat || (chat.requesterUserId !== currentUser.id && chat.recipientUserId !== currentUser.id)) {
+    return c.json({ code: "NOT_FOUND", message: "Chat not found" }, 404);
+  }
+  if (chat.status !== "ACTIVE") {
+    return c.json({ code: "CHAT_ENDED", message: "This chat has ended" }, 409);
+  }
+
+  const expectedIdentity = Buffer.from(
+    `halochat:user:${currentUser.id}:device:${parsed.data.deviceId}`,
+    "utf8"
+  ).toString("base64");
+  if (parsed.data.identity !== expectedIdentity) {
+    return c.json({ code: "INVALID_DEVICE_IDENTITY", message: "Device identity is not bound to this account" }, 400);
+  }
+
+  await db.insert(cryptoKeyPackages).values({
+    id: crypto.randomUUID(),
+    chatId,
+    userId: currentUser.id,
+    deviceId: parsed.data.deviceId,
+    scope: "PARTICIPANT",
+    identity: parsed.data.identity,
+    signatureKey: parsed.data.signatureKey,
+    keyPackage: parsed.data.keyPackage,
+    consumedAt: null,
+  }).onConflictDoUpdate({
+    target: [cryptoKeyPackages.chatId, cryptoKeyPackages.userId, cryptoKeyPackages.deviceId, cryptoKeyPackages.scope],
+    set: {
+      identity: parsed.data.identity,
+      signatureKey: parsed.data.signatureKey,
+      keyPackage: parsed.data.keyPackage,
+      consumedAt: null,
+      createdAt: new Date(),
+    },
+  });
+
+  return c.json({ ok: true });
+});
+
+chatsRouter.get("/:id/crypto/key-packages/:userId", async (c) => {
+  const currentUser = c.get("user");
+  const chatId = c.req.param("id");
+  const targetUserId = c.req.param("userId");
+  const db = await getDb();
+  const [chat] = await db.select().from(chats).where(eq(chats.id, chatId)).limit(1);
+  if (!chat || (chat.requesterUserId !== currentUser.id && chat.recipientUserId !== currentUser.id)) {
+    return c.json({ code: "NOT_FOUND", message: "Chat not found" }, 404);
+  }
+
+  const partnerUserId = chat.requesterUserId === currentUser.id ? chat.recipientUserId : chat.requesterUserId;
+  if (targetUserId !== partnerUserId) {
+    return c.json({ code: "NOT_FOUND", message: "Key package not found" }, 404);
+  }
+  if (chat.status !== "ACTIVE") {
+    return c.json({ code: "CHAT_ENDED", message: "This chat has ended" }, 409);
+  }
+
+  const candidates = await db.select().from(cryptoKeyPackages).where(and(
+    eq(cryptoKeyPackages.chatId, chatId),
+    eq(cryptoKeyPackages.userId, partnerUserId),
+    eq(cryptoKeyPackages.scope, "PARTICIPANT"),
+    isNull(cryptoKeyPackages.consumedAt),
+  )).orderBy(asc(cryptoKeyPackages.createdAt)).limit(1);
+  const candidate = candidates[0];
+  if (!candidate) {
+    return c.json({ code: "KEY_PACKAGE_UNAVAILABLE", message: "The other participant's device is not ready yet" }, 409);
+  }
+
+  const claimed = await db.update(cryptoKeyPackages)
+    .set({ consumedAt: new Date() })
+    .where(and(eq(cryptoKeyPackages.id, candidate.id), isNull(cryptoKeyPackages.consumedAt)))
+    .returning();
+  if (!claimed.length) {
+    return c.json({ code: "KEY_PACKAGE_UNAVAILABLE", message: "A device key package was just claimed; retry" }, 409);
+  }
+
+  return c.json({
+    keyPackage: {
+      userId: candidate.userId,
+      deviceId: candidate.deviceId,
+      identity: candidate.identity,
+      signatureKey: candidate.signatureKey,
+      keyPackage: candidate.keyPackage,
+    },
+  });
 });
 
 chatsRouter.get("/:id/messages", async (c) => {

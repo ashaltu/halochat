@@ -1,0 +1,11 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["HaloChatE2eeModule"],
+    "podspecPath": "HaloChatE2ee.podspec"
+  },
+  "android": {
+    "modules": ["expo.modules.halochate2ee.HaloChatE2eeModule"],
+    "gradlePath": "android/build.gradle"
+  }
+}

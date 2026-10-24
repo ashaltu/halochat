@@ -185,6 +185,25 @@ export const messages = pgTable("message", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (table) => [uniqueIndex("message_chat_seq_unique").on(table.chatId, table.seq)]);
 
+export const cryptoKeyPackages = pgTable("crypto_key_package", {
+  id: text("id").primaryKey(),
+  chatId: text("chat_id")
+    .notNull()
+    .references(() => chats.id, { onDelete: "cascade" }),
+  userId: text("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  deviceId: text("device_id").notNull(),
+  scope: text("scope").notNull().default("PARTICIPANT"),
+  identity: text("identity").notNull(),
+  signatureKey: text("signature_key").notNull(),
+  keyPackage: text("key_package").notNull(),
+  consumedAt: timestamp("consumed_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("crypto_key_package_scope_device_unique").on(table.chatId, table.userId, table.deviceId, table.scope),
+]);
+
 // 12. Whisper
 export const whispers = pgTable("whisper", {
   id: text("id").primaryKey(),

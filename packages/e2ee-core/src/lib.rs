@@ -338,19 +338,48 @@ pub fn create_device(identity: &[u8]) -> Result<(Vec<u8>, Vec<u8>), String> {
     signer
         .store(provider.storage())
         .map_err(|error| error.to_string())?;
+    let encoded_key_package = create_key_package_for_device(&provider, credential, &signer)?;
+    let state = encode_state(&provider, identity.to_vec(), signer.to_public_vec(), None)?;
+    Ok((state, encoded_key_package))
+}
+
+fn create_key_package_for_device(
+    provider: &HaloProvider,
+    credential: BasicCredential,
+    signer: &SignatureKeyPair,
+) -> Result<Vec<u8>, String> {
     let credential_with_key = CredentialWithKey {
         credential: credential.into(),
         signature_key: signer.public().into(),
     };
-    let key_package = KeyPackage::builder()
-        .build(SUITE, &provider, &signer, credential_with_key)
-        .map_err(|error| error.to_string())?;
-    let encoded_key_package = key_package
+    KeyPackage::builder()
+        .build(SUITE, provider, signer, credential_with_key)
+        .map_err(|error| error.to_string())?
         .key_package()
         .tls_serialize_detached()
-        .map_err(|error| error.to_string())?;
-    let state = encode_state(&provider, identity.to_vec(), signer.to_public_vec(), None)?;
-    Ok((state, encoded_key_package))
+        .map_err(|error| error.to_string())
+}
+
+pub fn create_key_package(state: &[u8]) -> Result<(Vec<u8>, Vec<u8>), String> {
+    let (snapshot, provider) = decode_state(state)?;
+    let signer = SignatureKeyPair::read(
+        provider.storage(),
+        &snapshot.signature_public_key,
+        SUITE.signature_algorithm(),
+    )
+    .ok_or_else(|| "MLS signing key is missing".to_owned())?;
+    let key_package = create_key_package_for_device(
+        &provider,
+        BasicCredential::new(snapshot.identity.clone()),
+        &signer,
+    )?;
+    let updated_state = encode_state(
+        &provider,
+        snapshot.identity.clone(),
+        snapshot.signature_public_key.clone(),
+        snapshot.group_id.clone(),
+    )?;
+    Ok((updated_state, key_package))
 }
 
 pub fn create_group(state: &[u8], group_id: &[u8]) -> Result<Vec<u8>, String> {
