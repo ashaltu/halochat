@@ -64,6 +64,15 @@ describe("Whisper device credentials", () => {
     expect(request.mock.calls[0][0]).toBe("halochat.e2ee:user:chat");
   });
 
+  it("fails closed when browser storage exists without cross-tab locking", async () => {
+    vi.stubGlobal("indexedDB", {});
+    vi.stubGlobal("navigator", {});
+
+    await expect(ensureChatE2ee("user", "chat", "partner", "user"))
+      .rejects.toThrow("This browser cannot safely coordinate E2EE across tabs");
+    expect(stateStore.loadE2eeStateRecord).not.toHaveBeenCalled();
+  });
+
   it("retries an exact persisted KeyPackage after an ambiguous publication failure", async () => {
     let pending: any = null;
     stateStore.hasPublishedChatKeyPackage.mockResolvedValue(false);
