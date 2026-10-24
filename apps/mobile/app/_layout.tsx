@@ -29,7 +29,7 @@ function AngelForwardingSync() {
     queryFn: async () => {
       const { chats } = await apiRequest<{ chats: AngelForwardingChat[] }>("/api/v1/chats");
       for (const chat of chats) {
-        if (chat.mode !== "PROTECTED" || !(chat.ownAngelAccessPeriods?.length || chat.ownAngels?.length)) continue;
+        if (!(chat.ownAngelAccessPeriods?.length || chat.ownAngels?.length)) continue;
         try {
           const status = await syncAngelForwardingForChat(user!.id, chat);
           client.setQueryData(["angel-forwarding-status", chat.id], status);

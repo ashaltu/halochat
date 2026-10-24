@@ -83,8 +83,8 @@ describe("foreground Angel message sync", () => {
     expect(session.fetchAndDecryptChatMessages).toHaveBeenNthCalledWith(2, "protected-user", protectedChat.id, true);
   });
 
-  it("skips non-protected and inactive chats", async () => {
-    const comfortChat = { ...chat("comfort"), mode: "COMFORT" };
+  it("skips chats without access periods and inactive chats", async () => {
+    const comfortChat = { ...chat("comfort"), mode: "COMFORT", ownAngels: [], ownAngelAccessPeriods: [] };
     const endedChat = { ...chat("ended"), status: "ENDED" };
 
     await expect(syncAngelForwardingForChat("protected-user", comfortChat)).resolves.toEqual({ state: "idle", waitingCount: 0 });
@@ -95,6 +95,7 @@ describe("foreground Angel message sync", () => {
   it("uses retained group state for an ended period and excludes messages from its gap", async () => {
     const protectedChat = {
       ...chat(`historical-${Date.now()}`),
+      mode: "COMFORT",
       ownAngels: [],
       ownAngelAccessPeriods: [{
         id: "ended-period",
@@ -110,6 +111,7 @@ describe("foreground Angel message sync", () => {
 
     await syncAngelForwardingForChat("protected-user", protectedChat);
 
+    expect(session.ensureWhisperGroup).not.toHaveBeenCalled();
     expect(session.hasWhisperGroupState).toHaveBeenCalledWith(
       "protected-user", protectedChat.id, "angel-user", "ended-period",
     );

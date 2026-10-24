@@ -32,7 +32,7 @@ export async function syncAngelForwardingForChat(userId: string, chat: AngelForw
     ...angel,
     authorizedUntil: null,
   }));
-  if (chat.status !== "ACTIVE" || chat.mode !== "PROTECTED" || !periods.length) {
+  if (chat.status !== "ACTIVE" || !periods.length) {
     return { state: "idle" as const, waitingCount: 0 };
   }
 
