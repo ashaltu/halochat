@@ -69,17 +69,27 @@ function utf8String(value: Uint8Array) {
 
 async function withChatLock<T>(userId: string, chatId: string, operation: () => Promise<T>): Promise<T> {
   const key = `${userId}:${chatId}`;
-  const previous = locks.get(key) ?? Promise.resolve();
-  let release = () => {};
-  const current = new Promise<void>((resolve) => { release = resolve; });
-  locks.set(key, current);
-  await previous;
-  try {
-    return await operation();
-  } finally {
-    release();
-    if (locks.get(key) === current) locks.delete(key);
+  const runInProcess = async () => {
+    const previous = locks.get(key) ?? Promise.resolve();
+    let release = () => {};
+    const current = new Promise<void>((resolve) => { release = resolve; });
+    locks.set(key, current);
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (locks.get(key) === current) locks.delete(key);
+    }
+  };
+
+  if (typeof indexedDB !== "undefined") {
+    const lockManager = globalThis.navigator?.locks;
+    if (!lockManager) throw new Error("This browser cannot safely coordinate E2EE across tabs");
+    return lockManager.request(`halochat.e2ee:${key}`, { mode: "exclusive" }, runInProcess);
   }
+
+  return runInProcess();
 }
 
 function isMlsMetadata(value: unknown): value is { protocol: "MLS"; version: 1; kind: string; [key: string]: unknown } {

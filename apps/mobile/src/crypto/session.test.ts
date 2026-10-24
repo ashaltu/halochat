@@ -1,5 +1,5 @@
 import base64 from "base64-js";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { apiRequest, native, stateStore } = vi.hoisted(() => ({
   apiRequest: vi.fn(),
@@ -36,6 +36,8 @@ vi.mock("./state-store.js", () => stateStore);
 import { ensureChatE2ee, ensureWhisperGroup, forwardChatMessagesToAngel } from "./session.js";
 
 describe("Whisper device credentials", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
   beforeEach(() => {
     vi.clearAllMocks();
     stateStore.hasPublishedChatKeyPackage.mockResolvedValue(true);
@@ -45,6 +47,21 @@ describe("Whisper device credentials", () => {
     stateStore.getE2eeContext.mockResolvedValue(new Uint8Array([5]));
     stateStore.loadE2eeStateRecord.mockResolvedValue(null);
     native.verifyDeviceBinding.mockResolvedValue(false);
+  });
+
+  it("coordinates browser MLS access with an origin-wide group lock", async () => {
+    const request = vi.fn(async (_name: string, _options: unknown, operation: () => Promise<unknown>) => operation());
+    vi.stubGlobal("indexedDB", {});
+    vi.stubGlobal("navigator", { locks: { request } });
+    stateStore.loadE2eeStateRecord.mockResolvedValue({
+      state: { envelope: new Uint8Array([1]), deviceKey: new Uint8Array(32), context: new Uint8Array([2]) },
+      localData: { lastSeq: 0, pendingMessages: [], plaintextByMessageId: {} },
+    });
+
+    await expect(ensureChatE2ee("user", "chat", "partner", "user")).resolves.toBe("ready");
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(request.mock.calls[0][0]).toBe("halochat.e2ee:user:chat");
   });
 
   it("retries an exact persisted KeyPackage after an ambiguous publication failure", async () => {
