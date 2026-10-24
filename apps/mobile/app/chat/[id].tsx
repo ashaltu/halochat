@@ -22,6 +22,7 @@ import {
   encryptAndSendChatMessage,
   fetchAndDecryptChatMessages,
   decryptWhisper,
+  forwardChatMessagesToAngel,
   getChatSafetyVerification,
   markChatSafetyCodeVerified,
 } from "../../src/crypto/session.js";
@@ -86,16 +87,26 @@ export default function ChatConversationScreen() {
   });
 
   // Fetch Messages
-  const { data: messagesData, isLoading: messagesLoading } = useQuery({
-    queryKey: ["messages", id],
+  const messageQueryKey = ["messages", id, chat?.ownAngels?.map((angel: any) => `${angel.id}:${angel.authorizedFrom}`).join(",")];
+  const { data: messagesData, isLoading: messagesLoading, isError: messagesError } = useQuery({
+    queryKey: messageQueryKey,
     queryFn: async () => {
-      if (!user?.id) return { messages: [] };
-      const previous = queryClient.getQueryData<{ messages: any[] }>(["messages", id])?.messages || [];
+      if (!user?.id) return { messages: [], waitingForAngelGroups: 0 };
+      const previous = queryClient.getQueryData<{ messages: any[] }>(messageQueryKey)?.messages || [];
       const incoming = await fetchAndDecryptChatMessages(user.id, String(id), previous.length === 0);
       const merged = new Map(previous.map((message) => [message.id, message]));
       incoming.forEach((message) => merged.set(message.id, message));
+      const availableMessages = [...merged.values()].sort((left, right) => left.seq - right.seq);
+      const activeAngels = Array.isArray(chat?.ownAngels) ? chat.ownAngels : [];
+      let waitingForAngelGroups = 0;
+      for (const angel of activeAngels) {
+        const authorizedFrom = new Date(angel.authorizedFrom).getTime();
+        const authorizedMessages = availableMessages.filter((message) => new Date(message.createdAt).getTime() >= authorizedFrom);
+        waitingForAngelGroups += await forwardChatMessagesToAngel(user.id, String(id), user.id, angel.angelUserId, angel.id, authorizedMessages);
+      }
       return {
-        messages: [...merged.values()].sort((left, right) => left.seq - right.seq),
+        messages: availableMessages,
+        waitingForAngelGroups,
       };
     },
     enabled: e2eeQuery.data === "ready" && !!user?.id,
@@ -287,6 +298,18 @@ export default function ChatConversationScreen() {
           <Text style={styles.restrictionIcon}>⏸️</Text>
           <Text style={styles.restrictionText}>
             Your Angel has temporarily paused your sending in this chat.
+          </Text>
+        </View>
+      ) : null}
+
+      {isProtected && chat?.ownAngels?.length ? (
+        <View style={styles.restrictionBanner}>
+          <Text style={styles.restrictionText}>
+            {messagesError
+              ? "Could not confirm that the encrypted Angel timeline is up to date."
+              : messagesData?.waitingForAngelGroups
+                ? "Encrypted messages are waiting for your Angel's secure connection."
+                : "Your authorized Angels' encrypted timelines are up to date."}
           </Text>
         </View>
       ) : null}

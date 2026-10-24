@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { createApp } from "../../apps/server/src/app.js";
-import { closeDb, eq, getDb, initDbSchema, messages, users } from "@halochat/db";
+import { chatAngelAccess, closeDb, eq, getDb, initDbSchema, messages, users } from "@halochat/db";
 import {
   ApprovalThreshold,
   ChatMode,
@@ -703,6 +703,95 @@ describe("HaloChat MVP Integration Tests", () => {
       expect(protectedHistory.body.whispers.length).toBeGreaterThan(0);
       expect(protectedHistory.body.whispers.every((whisper: { toUserId: string }) => whisper.toUserId === aishaId)).toBe(true);
       expect(otherParticipantHistory.body.whispers).toEqual([]);
+    });
+
+    it("routes participant-message copies only to the matching Angel and access period", async () => {
+      const source = await api(`/api/v1/chats/${chatId}/messages`, {
+        method: "POST",
+        token: aishaToken,
+        body: {
+          ...opaqueTransportFixture(`angel-source-${crypto.randomUUID()}`),
+          clientMsgId: `angel-source-${crypto.randomUUID()}`,
+        },
+      });
+      expect(source.status).toBe(201);
+
+      const message = {
+        clientMsgId: `angel-forward-${crypto.randomUUID()}`,
+        accessId,
+        sourceMessageId: source.body.message.id,
+        sourceSeq: source.body.message.seq,
+        ...opaqueTransportFixture(`angel-copy-${crypto.randomUUID()}`, "whisper"),
+        encryptionMetadata: {
+          protocol: "MLS",
+          version: 1,
+          kind: "whisper",
+          mlsContentType: "application",
+          accessId,
+        },
+      };
+      const first = await api(`/api/v1/chats/${chatId}/angel-messages`, {
+        method: "POST",
+        token: aishaToken,
+        body: message,
+      });
+      const retry = await api(`/api/v1/chats/${chatId}/angel-messages`, {
+        method: "POST",
+        token: aishaToken,
+        body: message,
+      });
+      expect(first.status).toBe(201);
+      expect(retry.status).toBe(200);
+      expect(retry.body.message.id).toBe(first.body.message.id);
+
+      const angelHistory = await api(`/api/v1/angel/chats/${chatId}/messages`, { token: fatimaToken });
+      expect(angelHistory.status).toBe(200);
+      expect(angelHistory.body.timeline).toContainEqual(expect.objectContaining({
+        id: first.body.message.id,
+        accessId,
+        sourceMessageId: source.body.message.id,
+        ciphertext: message.ciphertext,
+      }));
+      expect(angelHistory.body.timeline).not.toContainEqual(expect.objectContaining({
+        id: source.body.message.id,
+        ciphertext: source.body.message.ciphertext,
+      }));
+      expect((await api(`/api/v1/angel/chats/${chatId}/messages`, { token: omarToken })).status).toBe(403);
+      expect((await api(`/api/v1/angel/chats/${chatId}/messages`, { token: saraToken })).status).toBe(403);
+
+      const stalePeriod = await api(`/api/v1/chats/${chatId}/angel-messages`, {
+        method: "POST",
+        token: aishaToken,
+        body: { ...message, accessId: "stale-access-period", encryptionMetadata: { ...message.encryptionMetadata, accessId: "stale-access-period" } },
+      });
+      expect(stalePeriod.status).toBe(409);
+      expect(stalePeriod.body.code).toBe("ANGEL_ACCESS_INACTIVE");
+
+      const db = await getDb();
+      const [access] = await db.select().from(chatAngelAccess).where(eq(chatAngelAccess.id, accessId)).limit(1);
+      const priorMessages = await db.select({ seq: messages.seq }).from(messages).where(eq(messages.chatId, chatId));
+      const oldMessage = {
+        id: `before-access-${crypto.randomUUID()}`,
+        chatId,
+        senderId: aishaId,
+        ciphertext: opaqueTransportFixture("before-access").ciphertext,
+        encryptionMetadata: { protocol: "MLS", version: 1, kind: "application" },
+        seq: Math.max(0, ...priorMessages.map((item) => item.seq)) + 1,
+        createdAt: new Date(access.authorizedFrom.getTime() - 1),
+      };
+      await db.insert(messages).values(oldMessage);
+      const preAuthorization = await api(`/api/v1/chats/${chatId}/angel-messages`, {
+        method: "POST",
+        token: aishaToken,
+        body: {
+          ...message,
+          clientMsgId: `angel-forward-${crypto.randomUUID()}`,
+          sourceMessageId: oldMessage.id,
+          sourceSeq: oldMessage.seq,
+        },
+      });
+      expect(preAuthorization.status).toBe(409);
+      expect(preAuthorization.body.code).toBe("SOURCE_MESSAGE_OUTSIDE_ACCESS");
     });
 
     it("rejects conflicting concurrent reuse of a Whisper id", async () => {

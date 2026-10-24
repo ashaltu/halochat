@@ -228,6 +228,33 @@ export const whispers = pgTable("whisper", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
+export const angelChatMessages = pgTable("angel_chat_message", {
+  id: text("id").primaryKey(),
+  chatId: text("chat_id")
+    .notNull()
+    .references(() => chats.id, { onDelete: "cascade" }),
+  accessId: text("access_id")
+    .notNull()
+    .references(() => chatAngelAccess.id, { onDelete: "cascade" }),
+  angelUserId: text("angel_user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  senderId: text("sender_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  sourceMessageId: text("source_message_id")
+    .notNull()
+    .references(() => messages.id, { onDelete: "cascade" }),
+  sourceSeq: integer("source_seq").notNull(),
+  clientMsgId: text("client_msg_id").notNull(),
+  ciphertext: text("ciphertext").notNull(),
+  encryptionMetadata: jsonb("encryption_metadata").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("angel_chat_message_access_source_unique").on(table.accessId, table.sourceMessageId),
+  uniqueIndex("angel_chat_message_sender_client_id_unique").on(table.senderId, table.clientMsgId),
+]);
+
 // 13. Chat Angel Access
 export const chatAngelAccess = pgTable("chat_angel_access", {
   id: text("id").primaryKey(),

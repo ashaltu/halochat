@@ -159,6 +159,25 @@ export const SendWhisperSchema = z.object({
   }
 });
 
+export const SendAngelChatMessageSchema = z.object({
+  clientMsgId: z.string().min(16).max(80),
+  accessId: z.string().min(1).max(120),
+  sourceMessageId: z.string().min(1).max(120),
+  sourceSeq: z.number().int().positive(),
+  ciphertext: z.string().min(1).regex(BASE64_BYTES),
+  encryptionMetadata: z.object({
+    protocol: z.literal("MLS"),
+    version: z.literal(1),
+    kind: z.literal("whisper"),
+    mlsContentType: z.literal("application"),
+    accessId: z.string().min(1).max(120),
+  }).passthrough(),
+}).superRefine((message, context) => {
+  if (message.accessId !== message.encryptionMetadata.accessId) {
+    context.addIssue({ code: "custom", path: ["encryptionMetadata", "accessId"], message: "MLS access period must match the message" });
+  }
+});
+
 export const ChatAccessRequestSchema = z.object({
   type: z.enum(["LEAVE", "REJOIN"]),
   angelUserId: z.string().min(1),
@@ -243,4 +262,5 @@ export type CreateContactRequestInput = z.infer<typeof CreateContactRequestSchem
 export type SendMessageInput = z.infer<typeof SendMessageSchema>;
 export type PublishChatKeyPackageInput = z.infer<typeof PublishChatKeyPackageSchema>;
 export type SendWhisperInput = z.infer<typeof SendWhisperSchema>;
+export type SendAngelChatMessageInput = z.infer<typeof SendAngelChatMessageSchema>;
 export type ProfileCorrectionRequestInput = z.infer<typeof ProfileCorrectionRequestSchema>;

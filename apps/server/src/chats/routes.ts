@@ -6,6 +6,7 @@ import {
   chats,
   messages,
   whispers,
+  angelChatMessages,
   cryptoKeyPackages,
   chatAngelAccess,
   angelAssignments,
@@ -31,7 +32,7 @@ import {
   ChatAngelInvitationSchema,
   sanitizeChatForParticipant,
   WsEventType,
-  isParticipantOnlyMessage,
+  SendAngelChatMessageSchema,
 } from "@halochat/shared";
 import { wsManager } from "../realtime/index.js";
 import { AppEnv } from "../types.js";
@@ -241,6 +242,7 @@ chatsRouter.get("/", async (c) => {
 
     const ownAngels = ownAccess.map((row) => ({
       id: row.access.id,
+      authorizedFrom: row.access.authorizedFrom.toISOString(),
       angelUserId: row.angelUser.id,
       angelUsername: row.angelUser.username,
       angelDisplayName: row.angelUser.displayName,
@@ -322,6 +324,7 @@ chatsRouter.get("/:id", async (c) => {
 
   const ownAngels = ownAccess.map((row) => ({
     id: row.access.id,
+    authorizedFrom: row.access.authorizedFrom.toISOString(),
     angelUserId: row.angelUser.id,
     angelUsername: row.angelUser.username,
     angelDisplayName: row.angelUser.displayName,
@@ -572,6 +575,85 @@ chatsRouter.get("/:id/whispers", async (c) => {
   return c.json({ whispers: whisperList });
 });
 
+chatsRouter.post("/:id/angel-messages", async (c) => {
+  const currentUser = c.get("user");
+  const chatId = c.req.param("id");
+  const body = await c.req.json().catch(() => ({}));
+  const parsed = SendAngelChatMessageSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ code: "VALIDATION_ERROR", errors: parsed.error.flatten().fieldErrors }, 400);
+  }
+
+  const db = await getDb();
+  const result = await db.transaction(async (tx) => {
+    const [chat] = await tx.select().from(chats).where(eq(chats.id, chatId)).limit(1).for("update");
+    if (!chat || (chat.requesterUserId !== currentUser.id && chat.recipientUserId !== currentUser.id)) {
+      return { status: 404, body: { code: "NOT_FOUND", message: "Chat not found" } };
+    }
+    if (chat.status !== "ACTIVE") {
+      return { status: 409, body: { code: "CHAT_ENDED", message: "This chat has ended" } };
+    }
+    const [access] = await tx.select({ access: chatAngelAccess, assignment: angelAssignments })
+      .from(chatAngelAccess)
+      .innerJoin(angelAssignments, eq(chatAngelAccess.angelAssignmentId, angelAssignments.id))
+      .where(and(
+        eq(chatAngelAccess.id, parsed.data.accessId),
+        eq(chatAngelAccess.chatId, chatId),
+        eq(angelAssignments.userId, currentUser.id),
+        eq(angelAssignments.status, "ACTIVE"),
+        isNull(chatAngelAccess.authorizedUntil),
+      )).limit(1).for("update");
+    if (!access) return { status: 409, body: { code: "ANGEL_ACCESS_INACTIVE", message: "This Angel access period is not active" } };
+
+    const [source] = await tx.select().from(messages).where(and(
+      eq(messages.id, parsed.data.sourceMessageId),
+      eq(messages.chatId, chatId),
+      eq(messages.seq, parsed.data.sourceSeq),
+    )).limit(1);
+    if (!source || source.createdAt < access.access.authorizedFrom ||
+      (access.access.authorizedUntil && source.createdAt > access.access.authorizedUntil)) {
+      return { status: 409, body: { code: "SOURCE_MESSAGE_OUTSIDE_ACCESS", message: "The message is outside this Angel access period" } };
+    }
+
+    const matches = (stored: typeof angelChatMessages.$inferSelect) =>
+      stored.chatId === chatId && stored.accessId === access.access.id &&
+      stored.angelUserId === access.access.angelUserId && stored.senderId === currentUser.id &&
+      stored.sourceMessageId === source.id && stored.sourceSeq === source.seq &&
+      stored.clientMsgId === parsed.data.clientMsgId && stored.ciphertext === parsed.data.ciphertext &&
+      canonicalJson(stored.encryptionMetadata) === canonicalJson(parsed.data.encryptionMetadata);
+    const [existing] = await tx.select().from(angelChatMessages).where(and(
+      eq(angelChatMessages.accessId, access.access.id),
+      eq(angelChatMessages.sourceMessageId, source.id),
+    )).limit(1);
+    if (existing) {
+      if (!matches(existing)) return { status: 409, body: { code: "CLIENT_MESSAGE_ID_REUSED", message: "This source message already has a different Angel copy" } };
+      return { status: 200, body: { message: existing } };
+    }
+
+    const [inserted] = await tx.insert(angelChatMessages).values({
+      id: crypto.randomUUID(),
+      chatId,
+      accessId: access.access.id,
+      angelUserId: access.access.angelUserId,
+      senderId: currentUser.id,
+      sourceMessageId: source.id,
+      sourceSeq: source.seq,
+      clientMsgId: parsed.data.clientMsgId,
+      ciphertext: parsed.data.ciphertext,
+      encryptionMetadata: parsed.data.encryptionMetadata,
+    }).onConflictDoNothing().returning();
+    if (inserted) return { status: 201, body: { message: inserted } };
+
+    const [raced] = await tx.select().from(angelChatMessages).where(and(
+      eq(angelChatMessages.accessId, access.access.id),
+      eq(angelChatMessages.sourceMessageId, source.id),
+    )).limit(1);
+    if (!raced || !matches(raced)) return { status: 409, body: { code: "CLIENT_MESSAGE_ID_REUSED", message: "This source message already has a different Angel copy" } };
+    return { status: 200, body: { message: raced } };
+  });
+  return c.json(result.body, result.status as 200 | 201 | 404 | 409);
+});
+
 chatsRouter.post("/:id/messages", async (c) => {
   const currentUser = c.get("user");
   const chatId = c.req.param("id");
@@ -752,22 +834,8 @@ chatsRouter.post("/:id/messages", async (c) => {
     message: msgPayload,
   });
 
-  // Broadcast to currently authorized angels
-  const activeAngels = await db
-    .select()
-    .from(chatAngelAccess)
-    .where(and(eq(chatAngelAccess.chatId, chatId), isNull(chatAngelAccess.authorizedUntil)));
-
-  for (const access of activeAngels) {
-    if (isParticipantOnlyMessage(msgPayload.encryptionMetadata)) continue;
-    wsManager.sendToUser(access.angelUserId, {
-      type: WsEventType.MESSAGE_NEW,
-      message: msgPayload,
-    });
-  }
-
   await notifyOfflineUsers(
-    [chat.requesterUserId, chat.recipientUserId, ...activeAngels.map((access) => access.angelUserId)],
+    [chat.requesterUserId, chat.recipientUserId],
     "New HaloChat message",
     { type: WsEventType.MESSAGE_NEW, chatId }
   );

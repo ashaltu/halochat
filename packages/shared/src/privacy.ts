@@ -96,6 +96,7 @@ export interface ChatDTO {
   createdAt: string;
   ownAngels?: {
     id: string;
+    authorizedFrom?: string;
     angelUserId: string;
     angelUsername?: string;
     angelDisplayName?: string;
@@ -114,6 +115,7 @@ export function sanitizeChatForParticipant(
   viewerUserId: string,
   ownAngels: {
     id: string;
+    authorizedFrom?: string;
     angelUserId: string;
     angelUsername?: string;
     angelDisplayName?: string;

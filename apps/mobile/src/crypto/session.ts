@@ -284,15 +284,27 @@ async function flushWhisperOutbox(userId: string, chatId: string, angelUserId: s
 
   while (record.localData.pendingMessages.length > 0) {
     const pending = record.localData.pendingMessages[0];
-    await apiRequest(`/api/v1/angel/chats/${chatId}/whispers`, {
-      method: "POST",
-      body: JSON.stringify({
-        clientMsgId: pending.clientMsgId,
-        ciphertext: pending.ciphertext,
-        encryptionMetadata: pending.encryptionMetadata,
-        plaintextCharLength: pending.plaintextCharLength ?? pending.plaintext?.length ?? 0,
-      }),
-    });
+    if (pending.angelForward) {
+      await apiRequest(`/api/v1/chats/${chatId}/angel-messages`, {
+        method: "POST",
+        body: JSON.stringify({
+          clientMsgId: pending.clientMsgId,
+          ...pending.angelForward,
+          ciphertext: pending.ciphertext,
+          encryptionMetadata: pending.encryptionMetadata,
+        }),
+      });
+    } else {
+      await apiRequest(`/api/v1/angel/chats/${chatId}/whispers`, {
+        method: "POST",
+        body: JSON.stringify({
+          clientMsgId: pending.clientMsgId,
+          ciphertext: pending.ciphertext,
+          encryptionMetadata: pending.encryptionMetadata,
+          plaintextCharLength: pending.plaintextCharLength ?? pending.plaintext?.length ?? 0,
+        }),
+      });
+    }
     const localData: E2eeLocalData = { ...record.localData, pendingMessages: record.localData.pendingMessages.slice(1) };
     await saveE2eeState(userId, stateKey, record.state, localData);
     record = { ...record, localData };
@@ -451,7 +463,6 @@ export async function decryptWhisper(
     if (!record) return null;
     const cached = record.localData.plaintextByMessageId[whisper.id];
     if (cached !== undefined) return cached;
-    if (userId === angelUserId) return null;
     const decrypted = await E2eeNative.decryptApplication(record.state, base64.toByteArray(whisper.ciphertext));
     const plaintext = utf8String(decrypted.message);
     await saveE2eeState(userId, stateKey, decrypted.state, {
@@ -459,6 +470,58 @@ export async function decryptWhisper(
       plaintextByMessageId: { ...record.localData.plaintextByMessageId, [whisper.id]: plaintext },
     });
     return plaintext;
+  });
+}
+
+export async function forwardChatMessagesToAngel(
+  userId: string,
+  chatId: string,
+  protectedUserId: string,
+  angelUserId: string,
+  accessId: string,
+  messages: Array<ServerMessage & { plaintext: string }>,
+) {
+  if (userId !== protectedUserId) throw new Error("Only the protected user can forward chat messages to their Angel");
+  const eligibleMessages = messages.filter((message) => message.plaintext &&
+    message.plaintext !== "This older message cannot be decrypted on this device." &&
+    isMlsMetadata(message.encryptionMetadata) && message.encryptionMetadata.kind === "application");
+  if (!eligibleMessages.length) return 0;
+
+  if (await ensureWhisperGroup(userId, chatId, protectedUserId, angelUserId, accessId) === "waiting") return eligibleMessages.length;
+  const stateKey = whisperStateKey(chatId, angelUserId, accessId);
+  return withChatLock(userId, stateKey, async () => {
+    await flushWhisperOutbox(userId, chatId, angelUserId, accessId);
+    const record = await loadE2eeStateRecord(userId, stateKey);
+    if (!record) return eligibleMessages.length;
+    let state = record.state;
+    let localData = record.localData;
+    let forwardedMessageIds = localData.forwardedMessageIds ?? {};
+    const pendingMessages = [...localData.pendingMessages];
+    for (const message of eligibleMessages) {
+      const copyKey = `${accessId}:${message.id}`;
+      if (forwardedMessageIds[copyKey]) continue;
+      const envelope = JSON.stringify({
+        senderId: message.senderId,
+        sourceMessageId: message.id,
+        sourceSeq: message.seq,
+        createdAt: message.createdAt,
+        plaintext: message.plaintext,
+      });
+      const encrypted = await E2eeNative.encryptApplication(state, utf8Bytes(envelope));
+      state = encrypted.state;
+      const clientMsgId = base64.fromByteArray((await E2eeNative.generateDeviceKey()).subarray(0, 16));
+      pendingMessages.push({
+        clientMsgId,
+        ciphertext: base64.fromByteArray(encrypted.message),
+        encryptionMetadata: { protocol: "MLS", version: 1, kind: "whisper", mlsContentType: "application", accessId },
+        angelForward: { accessId, sourceMessageId: message.id, sourceSeq: message.seq },
+      });
+      forwardedMessageIds = { ...forwardedMessageIds, [copyKey]: clientMsgId };
+    }
+    localData = { ...localData, pendingMessages, forwardedMessageIds };
+    await saveE2eeState(userId, stateKey, state, localData);
+    await flushWhisperOutbox(userId, chatId, angelUserId, accessId);
+    return 0;
   });
 }
 

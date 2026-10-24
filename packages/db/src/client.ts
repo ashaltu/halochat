@@ -199,6 +199,21 @@ export async function initDbSchema(db: DB) {
       "authorized_from" timestamp NOT NULL DEFAULT now(),
       "authorized_until" timestamp
     );`,
+    `CREATE TABLE IF NOT EXISTS "angel_chat_message" (
+      "id" text PRIMARY KEY,
+      "chat_id" text NOT NULL REFERENCES "chat"("id") ON DELETE CASCADE,
+      "access_id" text NOT NULL REFERENCES "chat_angel_access"("id") ON DELETE CASCADE,
+      "angel_user_id" text NOT NULL REFERENCES "user"("id") ON DELETE CASCADE,
+      "sender_id" text NOT NULL REFERENCES "user"("id") ON DELETE CASCADE,
+      "source_message_id" text NOT NULL REFERENCES "message"("id") ON DELETE CASCADE,
+      "source_seq" integer NOT NULL,
+      "client_msg_id" text NOT NULL,
+      "ciphertext" text NOT NULL,
+      "encryption_metadata" jsonb NOT NULL,
+      "created_at" timestamp NOT NULL DEFAULT now()
+    );`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "angel_chat_message_access_source_unique" ON "angel_chat_message" ("access_id", "source_message_id");`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "angel_chat_message_sender_client_id_unique" ON "angel_chat_message" ("sender_id", "client_msg_id");`,
     `CREATE TABLE IF NOT EXISTS "angel_send_restriction" (
       "id" text PRIMARY KEY,
       "chat_id" text NOT NULL REFERENCES "chat"("id") ON DELETE CASCADE,

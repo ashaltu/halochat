@@ -14,7 +14,60 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "../../src/api/client.js";
 import { theme } from "../../src/theme.js";
 import { useAuthStore } from "../../src/stores/auth.js";
-import { encryptAndSendWhisper } from "../../src/crypto/session.js";
+import { decryptWhisper, encryptAndSendWhisper, ensureWhisperGroup } from "../../src/crypto/session.js";
+
+function ForwardedMessages({ chat, user }: { chat: any; user: { id: string } }) {
+  const timeline = useQuery({
+    queryKey: ["angel-forwarded-messages", chat.chatId, chat.accessId, user.id],
+    queryFn: async () => {
+      const group = await ensureWhisperGroup(user.id, chat.chatId, chat.protectedUserId, user.id, chat.accessId);
+      if (group === "waiting") return [];
+      const response = await apiRequest<{ timeline: any[] }>(`/api/v1/angel/chats/${chat.chatId}/messages`);
+      const decrypted = [];
+      for (const message of response.timeline) {
+        if (message.isGapNotice) {
+          decrypted.push(message);
+          continue;
+        }
+        if (!message.accessId || !message.toUserId || message.angelUserId !== user.id) continue;
+        const value = await decryptWhisper(user.id, chat.chatId, chat.protectedUserId, user.id, message);
+        if (value === null) continue;
+        try {
+          const envelope = JSON.parse(value);
+          if (envelope.sourceMessageId !== message.sourceMessageId || envelope.sourceSeq !== message.sourceSeq) continue;
+          decrypted.push({ ...message, senderId: envelope.senderId, plaintext: envelope.plaintext, sourceCreatedAt: envelope.createdAt });
+        } catch {
+          continue;
+        }
+      }
+      return decrypted;
+    },
+    enabled: !!user.id && !!chat.accessId,
+    refetchInterval: 3000,
+  });
+
+  return (
+    <View style={{ marginTop: theme.spacing.md, paddingTop: theme.spacing.md, borderTopWidth: 1, borderTopColor: theme.colors.border }}>
+      <Text style={styles.cardBold}>Encrypted chat timeline</Text>
+      {timeline.isLoading ? <Text style={styles.cardSub}>Opening secure timeline…</Text> : null}
+      {!timeline.isLoading && (timeline.data?.length ?? 0) === 0 ? (
+        <Text style={styles.cardSub}>Messages shared during this access period will appear here.</Text>
+      ) : null}
+      {timeline.data?.map((message: any) => (
+        message.isGapNotice ? (
+          <Text key={`${message.from}:${message.until}`} style={[styles.cardSub, { marginTop: theme.spacing.sm }]}>{message.message}</Text>
+        ) : (
+        <View key={message.id} style={{ marginTop: theme.spacing.sm }}>
+          <Text style={styles.cardSub}>
+            {message.senderId === chat.protectedUserId ? "Protected person" : "Chat participant"} · {new Date(message.sourceCreatedAt).toLocaleString()}
+          </Text>
+          <Text style={{ color: theme.colors.text, fontSize: 14, marginTop: 2 }}>{message.plaintext}</Text>
+        </View>
+        )
+      ))}
+    </View>
+  );
+}
 
 export default function AngelTabScreen() {
   const queryClient = useQueryClient();
@@ -288,6 +341,8 @@ export default function AngelTabScreen() {
               <Text style={styles.cardSub}>
                 Authorized since {new Date(c.authorizedFrom).toLocaleDateString()}
               </Text>
+
+              {user?.id ? <ForwardedMessages chat={c} user={{ id: user.id }} /> : null}
 
               {/* Protective Controls */}
               <View style={styles.controlsGrid}>

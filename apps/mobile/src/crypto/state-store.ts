@@ -17,12 +17,14 @@ export type E2eePendingMessage = {
   encryptionMetadata: Record<string, unknown>;
   plaintext?: string;
   plaintextCharLength?: number;
+  angelForward?: { accessId: string; sourceMessageId: string; sourceSeq: number };
 };
 
 export type E2eeLocalData = {
   lastSeq: number;
   pendingMessages: E2eePendingMessage[];
   plaintextByMessageId: Record<string, string>;
+  forwardedMessageIds?: Record<string, string>;
 };
 
 export type E2eeStateRecord = {

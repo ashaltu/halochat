@@ -11,6 +11,7 @@ import {
   chats,
   messages,
   whispers,
+  angelChatMessages,
   cryptoKeyPackages,
   chatAngelAccess,
   angelSendRestrictions,
@@ -823,8 +824,9 @@ angelsRouter.get("/angel/chats/:id/messages", async (c) => {
 
   // Find all access periods for this angel in this chat
   const accessPeriods = await db
-    .select()
+    .select({ access: chatAngelAccess, assignment: angelAssignments })
     .from(chatAngelAccess)
+    .innerJoin(angelAssignments, eq(chatAngelAccess.angelAssignmentId, angelAssignments.id))
     .where(
       and(
         eq(chatAngelAccess.chatId, chatId),
@@ -836,25 +838,36 @@ angelsRouter.get("/angel/chats/:id/messages", async (c) => {
     return c.json({ code: "FORBIDDEN", message: "You have no authorized access history for this chat" }, 403);
   }
 
-  const allMessages = await db
-    .select()
-    .from(messages)
-    .where(eq(messages.chatId, chatId))
-    .orderBy(messages.seq);
+  const accessIds = accessPeriods.map(({ access }) => access.id);
+  const protectedUserByAccessId = new Map(accessPeriods.map(({ access, assignment }) => [access.id, assignment.userId]));
+  const forwardedCopies = await db.select({ copy: angelChatMessages, source: messages })
+    .from(angelChatMessages)
+    .innerJoin(messages, eq(angelChatMessages.sourceMessageId, messages.id))
+    .where(and(
+      eq(angelChatMessages.chatId, chatId),
+      eq(angelChatMessages.angelUserId, angel.id),
+      inArray(angelChatMessages.accessId, accessIds),
+    ))
+    .orderBy(asc(angelChatMessages.sourceSeq), asc(angelChatMessages.createdAt));
 
-  const formattedMessages = allMessages.map((m) => ({
-    id: m.id,
-    chatId: m.chatId,
-    senderId: m.senderId,
-    ciphertext: m.ciphertext,
-    encryptionMetadata: m.encryptionMetadata as Record<string, unknown> | null,
-    seq: m.seq,
-    createdAt: m.createdAt.toISOString(),
+  const formattedMessages = forwardedCopies.map(({ copy, source }) => ({
+    id: copy.id,
+    chatId: copy.chatId,
+    accessId: copy.accessId,
+    angelUserId: copy.angelUserId,
+    toUserId: protectedUserByAccessId.get(copy.accessId),
+    senderId: source.senderId,
+    sourceMessageId: copy.sourceMessageId,
+    sourceSeq: copy.sourceSeq,
+    ciphertext: copy.ciphertext,
+    encryptionMetadata: copy.encryptionMetadata as Record<string, unknown> | null,
+    seq: copy.sourceSeq,
+    createdAt: source.createdAt.toISOString(),
   }));
 
   const periods = accessPeriods.map((p) => ({
-    authorizedFrom: p.authorizedFrom.toISOString(),
-    authorizedUntil: p.authorizedUntil ? p.authorizedUntil.toISOString() : null,
+    authorizedFrom: p.access.authorizedFrom.toISOString(),
+    authorizedUntil: p.access.authorizedUntil ? p.access.authorizedUntil.toISOString() : null,
   }));
 
   // Filter messages strictly by authorized periods with gap notices (D6)

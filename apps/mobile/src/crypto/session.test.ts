@@ -10,6 +10,8 @@ const { apiRequest, native, stateStore } = vi.hoisted(() => ({
     joinGroup: vi.fn(),
     deviceIdentity: vi.fn(),
     groupMembers: vi.fn(),
+    encryptApplication: vi.fn(),
+    generateDeviceKey: vi.fn(),
   },
   stateStore: {
     hasPublishedChatKeyPackage: vi.fn(),
@@ -26,7 +28,7 @@ vi.mock("@halochat/e2ee-native", () => ({ default: native }));
 vi.mock("../api/client.js", () => ({ apiRequest }));
 vi.mock("./state-store.js", () => stateStore);
 
-import { ensureChatE2ee, ensureWhisperGroup } from "./session.js";
+import { ensureChatE2ee, ensureWhisperGroup, forwardChatMessagesToAngel } from "./session.js";
 
 describe("Whisper device credentials", () => {
   beforeEach(() => {
@@ -143,5 +145,47 @@ describe("Whisper device credentials", () => {
 
     expect(native.verifyDeviceBinding).toHaveBeenCalledOnce();
     expect(stateStore.saveE2eeState).toHaveBeenCalledOnce();
+  });
+
+  it("queues encrypted Angel copies once per source message and retries them idempotently", async () => {
+    let record: any = {
+      state: { revision: 0 },
+      localData: { lastSeq: 0, pendingMessages: [], plaintextByMessageId: {} },
+    };
+    stateStore.loadE2eeStateRecord.mockImplementation(async () => record);
+    stateStore.saveE2eeState.mockImplementation(async (_userId: string, _key: string, state: any, localData: any) => {
+      record = { state, localData };
+    });
+    native.encryptApplication.mockImplementation(async (state: any) => ({
+      state: { revision: state.revision + 1 },
+      message: new Uint8Array([state.revision + 10]),
+    }));
+    let keyId = 0;
+    native.generateDeviceKey.mockImplementation(async () => new Uint8Array(32).fill(++keyId));
+    apiRequest.mockResolvedValue({});
+
+    const messages = [1, 2].map((seq) => ({
+      id: `source-${seq}`,
+      chatId: "chat-id",
+      senderId: "peer-user",
+      ciphertext: base64.fromByteArray(new Uint8Array([seq])),
+      encryptionMetadata: { protocol: "MLS", version: 1, kind: "application" },
+      seq,
+      createdAt: `2026-01-01T00:00:0${seq}.000Z`,
+      plaintext: `message ${seq}`,
+    }));
+
+    const waiting = await forwardChatMessagesToAngel("protected-user", "chat-id", "protected-user", "angel-user", "access-id", messages);
+    const retry = await forwardChatMessagesToAngel("protected-user", "chat-id", "protected-user", "angel-user", "access-id", messages);
+
+    expect(waiting).toBe(0);
+    expect(retry).toBe(0);
+    expect(native.encryptApplication).toHaveBeenCalledTimes(2);
+    expect(apiRequest).toHaveBeenCalledTimes(2);
+    expect(record.localData.forwardedMessageIds).toEqual({
+      "access-id:source-1": expect.any(String),
+      "access-id:source-2": expect.any(String),
+    });
+    expect(record.localData.pendingMessages).toEqual([]);
   });
 });
