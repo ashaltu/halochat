@@ -759,6 +759,31 @@ describe("HaloChat MVP Integration Tests", () => {
       expect((await api(`/api/v1/angel/chats/${chatId}/messages`, { token: omarToken })).status).toBe(403);
       expect((await api(`/api/v1/angel/chats/${chatId}/messages`, { token: saraToken })).status).toBe(403);
 
+      const raceSource = await api(`/api/v1/chats/${chatId}/messages`, {
+        method: "POST",
+        token: aishaToken,
+        body: {
+          ...opaqueTransportFixture(`angel-race-source-${crypto.randomUUID()}`),
+          clientMsgId: `angel-source-${crypto.randomUUID()}`,
+        },
+      });
+      const raceClientMsgId = `angel-race-${crypto.randomUUID()}`;
+      const raceMessage = {
+        ...message,
+        clientMsgId: raceClientMsgId,
+        sourceMessageId: raceSource.body.message.id,
+        sourceSeq: raceSource.body.message.seq,
+      };
+      const [raceFirst, raceConflict] = await Promise.all([
+        api(`/api/v1/chats/${chatId}/angel-messages`, { method: "POST", token: aishaToken, body: raceMessage }),
+        api(`/api/v1/chats/${chatId}/angel-messages`, {
+          method: "POST",
+          token: aishaToken,
+          body: { ...raceMessage, ciphertext: opaqueTransportFixture("angel-race-altered", "whisper").ciphertext },
+        }),
+      ]);
+      expect([raceFirst.status, raceConflict.status].sort()).toEqual([201, 409]);
+
       const stalePeriod = await api(`/api/v1/chats/${chatId}/angel-messages`, {
         method: "POST",
         token: aishaToken,
