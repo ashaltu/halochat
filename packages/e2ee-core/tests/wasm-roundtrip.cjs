@@ -61,6 +61,9 @@ assert.throws(() =>
   processCommit(bobState, addCharlie.commit, membersJson([deviceIdentity(bob.state)])),
 );
 bobState = processCommit(bobState, addCharlie.commit, membersJson(expectedAfterAdd));
+assert.throws(() =>
+  processCommit(bobState, addCharlie.commit, membersJson(expectedAfterAdd)),
+);
 let charlieState = joinGroup(charlie.state, addCharlie.welcome);
 
 const sent = encryptApplication(aliceState, Buffer.from("hello from wasm"));

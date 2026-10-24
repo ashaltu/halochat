@@ -764,6 +764,7 @@ mod tests {
 
         let bob_updated =
             process_commit(&bob_group, &alice_updated.commit, &expected_roster).unwrap();
+        assert!(process_commit(&bob_updated, &alice_updated.commit, &expected_roster).is_err());
         let (alice_updated, ciphertext) =
             encrypt_application(&alice_updated.state, b"commit applied before app message")
                 .unwrap();
