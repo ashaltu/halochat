@@ -3,6 +3,7 @@ const { randomBytes } = require("node:crypto");
 const {
   addMember,
   createDevice,
+  createKeyPackage,
   createGroup,
   deviceIdentity,
   decryptApplication,
@@ -30,6 +31,8 @@ const membersJson = (members) => Buffer.from(JSON.stringify(members.map((member)
 
 const alice = createDevice(Buffer.from("alice/device-1"));
 const bob = createDevice(Buffer.from("bob/device-1"));
+const rotatedBobKeyPackage = createKeyPackage(bob.state);
+assert.notDeepEqual(Buffer.from(rotatedBobKeyPackage.keyPackage), Buffer.from(bob.keyPackage));
 let aliceState = createGroup(alice.state, Buffer.from("chat-group-1"));
 const storageKey = randomBytes(32);
 const stateContext = Buffer.from("account:alice/device:1/group:chat-group-1");

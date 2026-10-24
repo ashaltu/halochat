@@ -1,4 +1,4 @@
-.PHONY: all install build test e2ee-test e2ee-native-check e2ee-mobile-check e2ee-native-libs e2ee-bindings e2ee-wasm-check e2ee-wasm-test e2ee-android-module-check e2ee-ios-module-check e2ee-platform-module-check test-e2e dev-server dev-support dev-mobile clean check rust-check
+.PHONY: all install build test e2ee-test e2ee-native-check e2ee-mobile-check e2ee-native-libs e2ee-bindings e2ee-wasm-check e2ee-wasm-test e2ee-wasm-web e2ee-wasm-browser-assets e2ee-wasm-browser-test e2ee-android-module-check e2ee-ios-module-check e2ee-platform-module-check test-e2e dev-server dev-support dev-mobile mobile-web-build clean check rust-check
 
 WASM_BINDGEN ?= wasm-bindgen
 CARGO_ENV ?= CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_RELEASE_DEBUG=0
@@ -57,7 +57,23 @@ e2ee-wasm-test: e2ee-wasm-check
 	$(WASM_BINDGEN) packages/e2ee-core/target/wasm32-unknown-unknown/release/halochat_e2ee_core.wasm --target nodejs --out-dir packages/e2ee-core/target/wasm-node
 	node packages/e2ee-core/tests/wasm-roundtrip.cjs
 
-test-e2e:
+e2ee-wasm-web: e2ee-wasm-check
+	$(CARGO_ENV) cargo build --locked --manifest-path packages/e2ee-core/Cargo.toml --target wasm32-unknown-unknown --release
+	mkdir -p apps/mobile/modules/halochat-e2ee/src/wasm
+	$(WASM_BINDGEN) packages/e2ee-core/target/wasm32-unknown-unknown/release/halochat_e2ee_core.wasm --target web --out-dir apps/mobile/modules/halochat-e2ee/src/wasm
+	mkdir -p apps/mobile/public
+	cp apps/mobile/modules/halochat-e2ee/src/wasm/halochat_e2ee_core_bg.wasm apps/mobile/public/
+
+e2ee-wasm-browser-assets: e2ee-wasm-web
+	pnpm exec esbuild tests/e2e/fixtures/e2ee-web-store-entry.ts --bundle --platform=browser --format=esm --outfile=/private/tmp/halochat-e2ee-web-store-entry.js
+
+e2ee-wasm-browser-test: e2ee-wasm-browser-assets
+	pnpm exec playwright test tests/e2e/e2ee-wasm.spec.ts
+
+mobile-web-build: e2ee-wasm-web
+	pnpm --filter @halochat/mobile exec expo export --platform web
+
+test-e2e: e2ee-wasm-browser-assets
 	pnpm test:e2e
 
 dev-server:

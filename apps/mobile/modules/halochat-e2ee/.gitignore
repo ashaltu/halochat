@@ -1,4 +1,5 @@
 ios/halochat_e2ee_coreFFI.xcframework/
 android/src/main/jniLibs/**/*.so
+src/wasm/
 android/build/
 android/.gradle/

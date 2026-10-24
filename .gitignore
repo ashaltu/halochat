@@ -11,3 +11,4 @@ playwright-report
 *.log
 .env
 .env.local
+apps/mobile/public/halochat_e2ee_core_bg.wasm

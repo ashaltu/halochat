@@ -2,7 +2,9 @@
   "name": "@halochat/e2ee-native",
   "version": "0.1.0",
   "private": true,
-  "main": "src/index.ts",
+  "main": "src/index",
+  "react-native": "src/index.ts",
+  "browser": "src/index.web.ts",
   "types": "src/index.ts",
   "peerDependencies": {
     "expo": "*",

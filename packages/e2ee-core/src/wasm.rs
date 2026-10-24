@@ -78,6 +78,12 @@ pub fn create_device(identity: Vec<u8>) -> Result<JsValue, JsValue> {
     object_with_bytes(&[("state", &state), ("keyPackage", &key_package)])
 }
 
+#[wasm_bindgen(js_name = createKeyPackage)]
+pub fn create_key_package(state: Vec<u8>) -> Result<JsValue, JsValue> {
+    let (state, key_package) = super::create_key_package(&state).map_err(to_js_error)?;
+    object_with_bytes(&[("state", &state), ("keyPackage", &key_package)])
+}
+
 #[wasm_bindgen(js_name = createGroup)]
 pub fn create_group(state: Vec<u8>, group_id: Vec<u8>) -> Result<Vec<u8>, JsValue> {
     super::create_group(&state, &group_id).map_err(to_js_error)
