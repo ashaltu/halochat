@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { createHash } from "node:crypto";
 import { createApp } from "../../apps/server/src/app.js";
 import { closeDb, eq, getDb, initDbSchema, messages, users } from "@halochat/db";
 import {
@@ -45,9 +46,9 @@ describe("HaloChat MVP Integration Tests", () => {
     return { status: res.status, body: data };
   }
 
-  function encryptedFixture(text: string, kind: "application" | "whisper" = "application") {
+  function opaqueTransportFixture(label: string, kind: "application" | "whisper" = "application") {
     return {
-      ciphertext: Buffer.from(text, "utf8").toString("base64"),
+      ciphertext: createHash("sha256").update(`test-only:${label}`).digest("base64"),
       encryptionMetadata: { protocol: "MLS", version: 1, kind },
     };
   }
@@ -419,7 +420,7 @@ describe("HaloChat MVP Integration Tests", () => {
       });
     });
 
-    it("rejects plaintext message bodies", async () => {
+    it("rejects unencoded message values without the required MLS envelope shape", async () => {
       const res = await api(`/api/v1/chats/${chatId}/messages`, {
         method: "POST",
         token: omarToken,
@@ -431,7 +432,7 @@ describe("HaloChat MVP Integration Tests", () => {
 
     it("Omar sends message -> seq 1", async () => {
       const body = {
-        ...encryptedFixture("Hello Aisha, I would like to discuss business."),
+        ...opaqueTransportFixture("hello-aisha"),
         clientMsgId: `${chatId}-omar-seq1`,
       };
       const res = await api(`/api/v1/chats/${chatId}/messages`, {
@@ -461,7 +462,7 @@ describe("HaloChat MVP Integration Tests", () => {
       const reusedId = await api(`/api/v1/chats/${chatId}/messages`, {
         method: "POST",
         token: omarToken,
-        body: { ...body, ...encryptedFixture("different ciphertext") },
+        body: { ...body, ...opaqueTransportFixture("different-ciphertext") },
       });
       expect(reusedId.status).toBe(409);
       expect(reusedId.body.code).toBe("CLIENT_MESSAGE_ID_REUSED");
@@ -471,7 +472,7 @@ describe("HaloChat MVP Integration Tests", () => {
       const res = await api(`/api/v1/chats/${chatId}/messages`, {
         method: "POST",
         token: aishaToken,
-        body: encryptedFixture("Hi Omar, sure, please share details."),
+        body: opaqueTransportFixture("aisha-reply"),
       });
 
       expect(res.status).toBe(201);
@@ -480,7 +481,7 @@ describe("HaloChat MVP Integration Tests", () => {
 
     it("consumes the claimed KeyPackage with its durable Welcome idempotency key", async () => {
       const body = {
-        ...encryptedFixture("MLS Welcome", "application"),
+        ...opaqueTransportFixture("mls-welcome"),
         clientMsgId: `${chatId}-welcome`,
         encryptionMetadata: {
           protocol: "MLS",
@@ -523,7 +524,7 @@ describe("HaloChat MVP Integration Tests", () => {
       chatId = res.body.chats[0].id;
     });
 
-    it("rejects plaintext Whispers and accepts an encrypted Whisper envelope", async () => {
+    it("rejects unencoded Whispers and accepts the opaque MLS-tagged envelope shape", async () => {
       const plaintext = await api(`/api/v1/angel/chats/${chatId}/whispers`, {
         method: "POST",
         token: fatimaToken,
@@ -535,7 +536,7 @@ describe("HaloChat MVP Integration Tests", () => {
         method: "POST",
         token: fatimaToken,
         body: {
-          ...encryptedFixture("Be careful with payment terms.", "whisper"),
+          ...opaqueTransportFixture("whisper", "whisper"),
           plaintextCharLength: 30,
         },
       });
@@ -555,7 +556,7 @@ describe("HaloChat MVP Integration Tests", () => {
       const sendRes = await api(`/api/v1/chats/${chatId}/messages`, {
         method: "POST",
         token: aishaToken,
-        body: encryptedFixture("Sending while restricted"),
+        body: opaqueTransportFixture("restricted-send"),
       });
       expect(sendRes.status).toBe(409);
       expect(sendRes.body.code).toBe("SENDING_RESTRICTED");
@@ -564,7 +565,7 @@ describe("HaloChat MVP Integration Tests", () => {
       const omarSend = await api(`/api/v1/chats/${chatId}/messages`, {
         method: "POST",
         token: omarToken,
-        body: encryptedFixture("Are you still there?"),
+        body: opaqueTransportFixture("omar-followup"),
       });
       expect(omarSend.status).toBe(201);
     });
@@ -580,7 +581,7 @@ describe("HaloChat MVP Integration Tests", () => {
       const sendRes = await api(`/api/v1/chats/${chatId}/messages`, {
         method: "POST",
         token: aishaToken,
-        body: encryptedFixture("Yes, I am here."),
+        body: opaqueTransportFixture("aisha-back"),
       });
       expect(sendRes.status).toBe(201);
     });
@@ -623,7 +624,7 @@ describe("HaloChat MVP Integration Tests", () => {
 
     it("Messages sent while Fatima is absent are masked by history gap upon rejoin (D6)", async () => {
       // Message exchanged while Fatima is gone
-      const hiddenMessage = encryptedFixture("Private message while Angel absent");
+      const hiddenMessage = opaqueTransportFixture("angel-gap-message");
       await api(`/api/v1/chats/${chatId}/messages`, {
         method: "POST",
         token: omarToken,
@@ -653,7 +654,7 @@ describe("HaloChat MVP Integration Tests", () => {
         id: welcomeId,
         chatId,
         senderId: omarId,
-        ciphertext: Buffer.from("participant-only welcome").toString("base64"),
+        ciphertext: createHash("sha256").update("test-only:participant-welcome").digest("base64"),
         encryptionMetadata: { protocol: "MLS", version: 1, kind: "welcome" },
         seq: Math.max(0, ...chatMessages.map((message) => message.seq)) + 1,
         createdAt: new Date(),
