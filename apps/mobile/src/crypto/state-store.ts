@@ -4,6 +4,7 @@ import * as SecureStore from "expo-secure-store";
 import E2eeNative, { type E2eeState } from "@halochat/e2ee-native";
 
 const initialization = new Map<string, Promise<DeviceContext>>();
+const clearing = new Map<string, Promise<void>>();
 
 type DeviceContext = {
   deviceId: string;
@@ -44,6 +45,21 @@ const EMPTY_LOCAL_DATA: E2eeLocalData = {
   plaintextByMessageId: {},
 };
 
+export async function clearE2eeMemory(userId: string) {
+  const existingWipe = clearing.get(userId);
+  if (existingWipe) return existingWipe;
+  const pending = initialization.get(userId);
+  if (!pending) return;
+  initialization.delete(userId);
+  const wipe = pending.then((device) => { device.deviceKey.fill(0); }, () => {});
+  clearing.set(userId, wipe);
+  try {
+    await wipe;
+  } finally {
+    if (clearing.get(userId) === wipe) clearing.delete(userId);
+  }
+}
+
 function asciiBytes(value: string): Uint8Array {
   if (!/^[\x20-\x7e]+$/.test(value)) throw new Error("Invalid E2EE context");
   return Uint8Array.from(value, (character) => character.charCodeAt(0));
@@ -75,6 +91,11 @@ function deviceKeyKey(userId: string) {
 }
 
 async function getDeviceContext(userId: string): Promise<DeviceContext> {
+  const wipe = clearing.get(userId);
+  if (wipe) {
+    await wipe;
+    return getDeviceContext(userId);
+  }
   const existing = initialization.get(userId);
   if (existing) return existing;
 

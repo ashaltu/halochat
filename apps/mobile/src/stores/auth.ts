@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { Platform } from "react-native";
 import * as SecureStore from "expo-secure-store";
 import { apiRequest, setAuthToken } from "../api/client.js";
+import { clearE2eeMemory } from "../crypto/state-store.js";
 
 const SESSION_KEY = "halochat.session";
 
@@ -52,7 +53,7 @@ interface AuthState {
   logout: () => Promise<void>;
 }
 
-export const useAuthStore = create<AuthState>((set) => ({
+export const useAuthStore = create<AuthState>((set, get) => ({
   user: null,
   session: null,
   isLoading: true,
@@ -83,6 +84,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     }
   },
   logout: async () => {
+    const userId = get().user?.id;
     try {
       await apiRequest("/api/auth/sign-out", { method: "POST" });
     } catch (err) {
@@ -91,5 +93,6 @@ export const useAuthStore = create<AuthState>((set) => ({
     setAuthToken(null);
     await saveSession(null);
     set({ user: null, session: null });
+    if (userId) await clearE2eeMemory(userId);
   },
 }));

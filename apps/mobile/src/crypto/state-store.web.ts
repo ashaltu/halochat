@@ -2,6 +2,7 @@ import base64 from "base64-js";
 import E2eeWeb, { type E2eeState } from "@halochat/e2ee-native";
 
 const initialization = new Map<string, Promise<DeviceContext>>();
+const clearing = new Map<string, Promise<void>>();
 const databaseName = "halochat-e2ee-v1";
 
 type DeviceContext = {
@@ -38,6 +39,21 @@ const EMPTY_LOCAL_DATA: E2eeLocalData = {
   pendingMessages: [],
   plaintextByMessageId: {},
 };
+
+export async function clearE2eeMemory(userId: string) {
+  const existingWipe = clearing.get(userId);
+  if (existingWipe) return existingWipe;
+  const pending = initialization.get(userId);
+  if (!pending) return;
+  initialization.delete(userId);
+  const wipe = pending.then((device) => { device.deviceKey.fill(0); }, () => {});
+  clearing.set(userId, wipe);
+  try {
+    await wipe;
+  } finally {
+    if (clearing.get(userId) === wipe) clearing.delete(userId);
+  }
+}
 
 function bytes(value: string) {
   return new TextEncoder().encode(value);
@@ -116,6 +132,11 @@ async function getMasterKey(userId: string) {
 }
 
 async function getDeviceContext(userId: string): Promise<DeviceContext> {
+  const wipe = clearing.get(userId);
+  if (wipe) {
+    await wipe;
+    return getDeviceContext(userId);
+  }
   const current = initialization.get(userId);
   if (current) return current;
 
